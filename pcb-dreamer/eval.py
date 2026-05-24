@@ -21,8 +21,8 @@ torch.distributions.Distribution.set_default_validate_args(False)
 
 import tools
 from envs.pcb_env import TPPlacementEnv
-from envs.board import load_te_example, generate_toy_board, generate_candidate_grid
-from envs.routing import route_all_traces
+from envs.board import load_te_example, generate_candidate_grid
+from envs.routing import route_all_traces, validate_routing_constraints
 from envs.visualize import plot_board
 
 
@@ -46,12 +46,14 @@ def run_random_baseline(board, candidates, num_traces, num_episodes=5):
             if not found:
                 placed.append(tuple(candidates[rng.randint(len(candidates))]))
 
-        paths, lengths, failures = route_all_traces(board, placed, resolution=1.0)
+        paths, lengths, failures = route_all_traces(board, placed)
+        validation = validate_routing_constraints(board, paths)
         finite = [l for l in lengths if l < float('inf')]
         results.append({
             "placed": placed, "paths": paths, "lengths": lengths,
             "failures": failures, "total_length": sum(finite) if finite else 0,
             "spread": (max(finite) - min(finite)) / np.mean(finite) if len(finite) > 1 else 0,
+            "validation": validation,
         })
     return results
 
@@ -81,12 +83,14 @@ def run_greedy_baseline(board, candidates, num_traces, num_episodes=5):
             if not found:
                 placed.append(tuple(candidates[order[0]]))
 
-        paths, lengths, failures = route_all_traces(board, placed, resolution=1.0)
+        paths, lengths, failures = route_all_traces(board, placed)
+        validation = validate_routing_constraints(board, paths)
         finite = [l for l in lengths if l < float('inf')]
         results.append({
             "placed": placed, "paths": paths, "lengths": lengths,
             "failures": failures, "total_length": sum(finite) if finite else 0,
             "spread": (max(finite) - min(finite)) / np.mean(finite) if len(finite) > 1 else 0,
+            "validation": validation,
         })
     return results
 
@@ -201,7 +205,7 @@ def main():
     outdir = pathlib.Path(args.outdir)
     outdir.mkdir(parents=True, exist_ok=True)
 
-    board = generate_toy_board(num_traces=args.num_traces)
+    board = load_te_example(num_traces=args.num_traces)
     candidates = generate_candidate_grid(board, resolution=6.5)
     print(f"Board: {board.width}x{board.height}mm, {args.num_traces} traces, {len(candidates)} candidates")
 
@@ -209,7 +213,10 @@ def main():
     print("\n--- Random Baseline ---")
     random_results = run_random_baseline(board, candidates, args.num_traces, args.episodes)
     for i, r in enumerate(random_results):
-        print(f"  Ep {i + 1}: failures={r['failures']}, length={r['total_length']:.0f}mm, spread={r['spread']:.2f}")
+        v = r["validation"]
+        t2t = f"{v['trace_to_trace_min']:.2f}" if v['trace_to_trace_min'] < float('inf') else "n/a"
+        print(f"  Ep {i + 1}: failures={r['failures']}, length={r['total_length']:.0f}mm, "
+              f"spread={r['spread']:.2f}, t2t_min={t2t}mm, valid={v['all_valid']}")
         plot_board(board, test_points=r["placed"], paths=r["paths"], candidates=candidates,
                    title=f"Random #{i + 1}: {r['failures']} failures, {r['total_length']:.0f}mm",
                    filename=str(outdir / f"random_{i + 1}.png"))
@@ -218,7 +225,10 @@ def main():
     print("\n--- Greedy Baseline ---")
     greedy_results = run_greedy_baseline(board, candidates, args.num_traces, args.episodes)
     for i, r in enumerate(greedy_results):
-        print(f"  Ep {i + 1}: failures={r['failures']}, length={r['total_length']:.0f}mm, spread={r['spread']:.2f}")
+        v = r["validation"]
+        t2t = f"{v['trace_to_trace_min']:.2f}" if v['trace_to_trace_min'] < float('inf') else "n/a"
+        print(f"  Ep {i + 1}: failures={r['failures']}, length={r['total_length']:.0f}mm, "
+              f"spread={r['spread']:.2f}, t2t_min={t2t}mm, valid={v['all_valid']}")
         plot_board(board, test_points=r["placed"], paths=r["paths"], candidates=candidates,
                    title=f"Greedy #{i + 1}: {r['failures']} failures, {r['total_length']:.0f}mm",
                    filename=str(outdir / f"greedy_{i + 1}.png"))
@@ -242,9 +252,11 @@ def main():
         fails = [r["failures"] for r in results]
         lengths = [r["total_length"] for r in results]
         spreads = [r["spread"] for r in results]
+        valid_count = sum(1 for r in results if r.get("validation", {}).get("all_valid", False))
         print(f"{name:>15s}: failures={np.mean(fails):.1f}±{np.std(fails):.1f}, "
               f"length={np.mean(lengths):.0f}±{np.std(lengths):.0f}mm, "
-              f"spread={np.mean(spreads):.2f}±{np.std(spreads):.2f}")
+              f"spread={np.mean(spreads):.2f}±{np.std(spreads):.2f}, "
+              f"valid={valid_count}/{len(results)}")
 
     summarize("Random", random_results)
     summarize("Greedy", greedy_results)

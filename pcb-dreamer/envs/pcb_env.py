@@ -14,7 +14,7 @@ import numpy as np
 from typing import Optional, Dict, Any, Tuple, List
 
 from envs.board import (
-    BoardSpec, load_te_example, generate_toy_board, generate_candidate_grid,
+    BoardSpec, load_te_example, generate_candidate_grid,
     check_tp_spacing, TP_TO_TP_MIN,
 )
 from envs.routing import route_all_traces
@@ -30,16 +30,14 @@ class TPPlacementEnv(gym.Env):
             board: Optional[BoardSpec] = None,
             num_traces: int = 8,
             candidate_resolution: float = 6.5,
-            routing_resolution: float = 0.5,
             render_mode: Optional[str] = None,
     ):
         super().__init__()
         self.render_mode = render_mode
-        self.routing_resolution = routing_resolution
 
-        # Use toy board by default (properly spaced starts)
+        # Use TE example board by default (real geometry, adjusted spacing)
         if board is None:
-            board = generate_toy_board(num_traces=num_traces)
+            board = load_te_example(num_traces=num_traces)
         self.board = board
         self.num_traces = min(num_traces, len(self.board.traces))
         self.board.traces = self.board.traces[:self.num_traces]
@@ -210,7 +208,7 @@ class TPPlacementEnv(gym.Env):
 
     def _episode_reward(self) -> float:
         paths, lengths, failures = route_all_traces(
-            self.board, self.placed_tps, self.routing_resolution
+            self.board, self.placed_tps
         )
         self.placed_lengths = lengths
         reward = 0.0

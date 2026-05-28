@@ -124,9 +124,10 @@ def main():
     outdir.mkdir(exist_ok=True)
 
     board = load_te_example(num_traces=args.num_traces)
-    candidates = generate_candidate_grid(board, resolution=6.5)
+    candidates, real_count = generate_candidate_grid(board, resolution=6.5)
+    candidates = candidates[:real_count]  # use only real candidates for baselines
     print(f"Board: {board.width}x{board.height}mm, {len(board.traces)} traces, "
-          f"{len(candidates)} candidates, router={router_name}")
+          f"{real_count} candidates, router={router_name}")
 
     def print_results(name, results):
         for i, r in enumerate(results):

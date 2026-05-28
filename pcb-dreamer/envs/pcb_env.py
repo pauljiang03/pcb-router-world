@@ -14,7 +14,7 @@ Observation: 64x64x3 uint8 image.
   Red:   obstacles + clearance zones + board edge
   Green: placed test points + exclusion zones + routed traces
   Blue:  current trace starting point + valid remaining candidates
-Action: discrete index into candidate grid.
+Action: discrete index into candidate grid (fixed size MAX_CANDIDATES).
 """
 
 import gymnasium as gym
@@ -24,7 +24,7 @@ from typing import Optional, List, Tuple
 
 from envs.board import (
     BoardSpec, load_te_example, generate_candidate_grid,
-    check_tp_spacing, TP_TO_TP_MIN, TP_TO_EDGE_MIN,
+    check_tp_spacing, TP_TO_TP_MIN, TP_TO_EDGE_MIN, MAX_CANDIDATES,
 )
 from envs.routing import route_all_traces as route_astar
 
@@ -41,20 +41,25 @@ class TPPlacementEnv(gym.Env):
         candidate_resolution: float = 6.5,
         use_freerouting: bool = True,
         render_mode: Optional[str] = None,
+        seed: int = 0,
     ):
         super().__init__()
         self.render_mode = render_mode
         self.use_freerouting = use_freerouting
+        self._num_traces_requested = num_traces
+        self._candidate_resolution = candidate_resolution
+        self._board_seed = seed
 
         if board is None:
-            board = load_te_example(num_traces=num_traces)
+            board = load_te_example(num_traces=num_traces, seed=seed)
         self.board = board
         self.num_traces = min(num_traces, len(self.board.traces))
         self.board.traces = self.board.traces[:self.num_traces]
 
-        self.candidates = generate_candidate_grid(self.board, candidate_resolution)
-        self.num_candidates = len(self.candidates)
-        assert self.num_candidates > 0, "No valid candidates!"
+        self.candidates, self._real_count = generate_candidate_grid(
+            self.board, candidate_resolution, MAX_CANDIDATES
+        )
+        self.num_candidates = MAX_CANDIDATES
 
         self.action_space = spaces.Discrete(self.num_candidates)
         self.observation_space = spaces.Box(
@@ -68,6 +73,8 @@ class TPPlacementEnv(gym.Env):
         self.placed_tps: List[Tuple[float, float]] = []
         self.current_trace: int = 0
         self.candidate_mask = np.ones(self.num_candidates, dtype=bool)
+        # Mask out padding entries
+        self.candidate_mask[self._real_count:] = False
 
         # Filled after validation
         self.routed_paths = None
@@ -134,7 +141,7 @@ class TPPlacementEnv(gym.Env):
         if self.current_trace < self.num_traces:
             t = self.board.traces[self.current_trace]
             self._draw_circle(img, t.start_x, t.start_y, 3.0, 2, 255)
-        for i in range(self.num_candidates):
+        for i in range(self._real_count):  # only draw real candidates
             if self.candidate_mask[i]:
                 cx, cy = self.candidates[i]
                 px, py = self._w2p(cx, cy)
@@ -152,7 +159,7 @@ class TPPlacementEnv(gym.Env):
     # ---- candidate mask ----
 
     def _update_candidate_mask(self):
-        for i in range(self.num_candidates):
+        for i in range(self._real_count):  # only check real candidates
             if self.candidate_mask[i]:
                 cx, cy = self.candidates[i]
                 if not check_tp_spacing(self.placed_tps, cx, cy):
@@ -225,6 +232,7 @@ class TPPlacementEnv(gym.Env):
         self.placed_tps = []
         self.current_trace = 0
         self.candidate_mask = np.ones(self.num_candidates, dtype=bool)
+        self.candidate_mask[self._real_count:] = False  # mask padding
         self.routed_paths = None
         self.routed_lengths = None
         return self._render_obs(), self._get_info()
@@ -245,8 +253,8 @@ class TPPlacementEnv(gym.Env):
         self.current_trace += 1
         self._update_candidate_mask()
 
-        # Preserve future options
-        valid_frac = self.candidate_mask.sum() / max(self.num_candidates, 1)
+        # Preserve future options (count only real candidates)
+        valid_frac = self.candidate_mask[:self._real_count].sum() / max(self._real_count, 1)
         reward += 0.3 * valid_frac
 
         terminated = self.current_trace >= self.num_traces

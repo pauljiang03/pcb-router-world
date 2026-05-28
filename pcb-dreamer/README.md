@@ -112,42 +112,43 @@ Informed by the Component-Centric Placement paper (2026), which found that discr
 
 ---
 
-## 5. State Representation (Vector Only)
+## 5. State Representation (64×64 RGB Image)
 
-All board information comes as structured CSV data. No images are rendered. A pure vector observation with MLP encoder is faster, more precise, and more sample-efficient than CNN on rasterized images.
+The environment renders the board state as a 64×64×3 uint8 image, processed by DreamerV3's CNN encoder. Each color channel encodes a different category of information, giving the world model a spatially grounded view of the placement problem.
 
-### Observation Vector (~500–800 floats)
+### Observation Image Channels
 
-**Board context (fixed per episode):**
-- Board width, height (normalized to [0, 1])
-- Number of traces (normalized)
+**Red channel — Obstacles and boundaries:**
+- Rectangular obstacles (NRZ, tab pads) with clearance zones (intensity 150) and cores (intensity 255)
+- Circular obstacles (UPTHs) with clearance halos
+- Board edge inset by TP_TO_EDGE_MIN (intensity 100)
+- Connector outline (intensity 180)
+- Dim starting points for all traces (intensity 80)
 
-**Obstacles (zero-padded to max count, e.g., 10):**
-- Per obstacle: type (one-hot), center x, center y, width, height (normalized)
+**Green channel — Placed test points:**
+- TP-to-TP exclusion zones (13mm radius, intensity 60)
+- Placed TP markers (intensity 255)
 
-**Trace starting points (zero-padded to max count, e.g., 20):**
-- Per trace: start x, y, breakout length (normalized)
+**Blue channel — Current decision context:**
+- Current trace starting point (bright circle, intensity 255)
+- Valid remaining candidate positions (intensity 150)
 
-**Placed test points (updated each step):**
-- Per trace: test point x, y (0 if unplaced), placed flag, routed trace length
+### Action Space
 
-**Placement progress:**
-- Current trace index, fraction placed
-- Mean and std of placed trace lengths
-- Fraction of candidate positions still valid
-- Minimum pairwise TP-to-TP distance
-
-**Candidate mask (fixed-length, e.g., 200):**
-- Binary: 1 = valid, 0 = blocked by exclusion zone or obstacle
+Fixed discrete action space of 200 candidates (MAX_CANDIDATES). The candidate grid is generated at 6.5mm resolution and padded/truncated to 200 entries. Padding slots are permanently masked invalid.
 
 ### DreamerV3 Config
 
 ```yaml
-encoder: {mlp_keys: '.*', cnn_keys: '$^'}
-decoder: {mlp_keys: '.*', cnn_keys: '$^'}
+encoder: {mlp_keys: '$^', cnn_keys: 'image', cnn_depth: 32, kernel_size: 4, minres: 4}
+decoder: {mlp_keys: '$^', cnn_keys: 'image', cnn_depth: 32, kernel_size: 4, minres: 4}
 ```
 
-MLP-only (dmc_proprio mode). No CNN. Trains ~2x faster than image-based, needs ~500K steps.
+CNN-only mode. The image observation captures spatial relationships (obstacle proximity, TP exclusion zones, candidate density) that inform the world model's dynamics predictions.
+
+### Board Randomization
+
+When a seed is provided, the connector cluster (NRZ, UPTHs, tab pads, starting traces) is shifted to a random position on the board while maintaining a 10mm margin from all edges. Board dimensions stay fixed (135×90mm), preserving the candidate grid resolution and action space size. Different seeds produce different spatial layouts for generalization.
 
 ---
 

@@ -1,10 +1,56 @@
+"""
+Lightweight env wrappers for DreamerV3.
+
+No dependency on gym — uses gymnasium.spaces for space definitions
+and plain wrapper classes for env composition.
+"""
+
 import datetime
-import gym
-import numpy as np
 import uuid
+import numpy as np
+import gymnasium.spaces as spaces
 
 
-class TimeLimit(gym.Wrapper):
+class BaseWrapper:
+    """Minimal env wrapper (replaces gym.Wrapper without the dependency)."""
+
+    def __init__(self, env):
+        self.env = env
+
+    @property
+    def observation_space(self):
+        return self.env.observation_space
+
+    @property
+    def action_space(self):
+        return self.env.action_space
+
+    @property
+    def reward_range(self):
+        return getattr(self.env, "reward_range", (-np.inf, np.inf))
+
+    @property
+    def metadata(self):
+        return getattr(self.env, "metadata", {})
+
+    def step(self, action):
+        return self.env.step(action)
+
+    def reset(self):
+        return self.env.reset()
+
+    def render(self):
+        return self.env.render()
+
+    def close(self):
+        if hasattr(self.env, "close"):
+            return self.env.close()
+
+    def __getattr__(self, name):
+        return getattr(self.env, name)
+
+
+class TimeLimit(BaseWrapper):
     def __init__(self, env, duration):
         super().__init__(env)
         self._duration = duration
@@ -26,7 +72,7 @@ class TimeLimit(gym.Wrapper):
         return self.env.reset()
 
 
-class NormalizeActions(gym.Wrapper):
+class NormalizeActions(BaseWrapper):
     def __init__(self, env):
         super().__init__(env)
         self._mask = np.logical_and(
@@ -36,7 +82,11 @@ class NormalizeActions(gym.Wrapper):
         self._high = np.where(self._mask, env.action_space.high, 1)
         low = np.where(self._mask, -np.ones_like(self._low), self._low)
         high = np.where(self._mask, np.ones_like(self._low), self._high)
-        self.action_space = gym.spaces.Box(low, high, dtype=np.float32)
+        self._action_space = spaces.Box(low, high, dtype=np.float32)
+
+    @property
+    def action_space(self):
+        return self._action_space
 
     def step(self, action):
         original = (action + 1) / 2 * (self._high - self._low) + self._low
@@ -44,15 +94,19 @@ class NormalizeActions(gym.Wrapper):
         return self.env.step(original)
 
 
-class OneHotAction(gym.Wrapper):
+class OneHotAction(BaseWrapper):
     def __init__(self, env):
-        assert isinstance(env.action_space, gym.spaces.Discrete)
+        assert hasattr(env.action_space, "n"), "OneHotAction requires a discrete action space"
         super().__init__(env)
         self._random = np.random.RandomState()
         shape = (self.env.action_space.n,)
-        space = gym.spaces.Box(low=0, high=1, shape=shape, dtype=np.float32)
+        space = spaces.Box(low=0, high=1, shape=shape, dtype=np.float32)
         space.discrete = True
-        self.action_space = space
+        self._action_space = space
+
+    @property
+    def action_space(self):
+        return self._action_space
 
     def step(self, action):
         index = np.argmax(action).astype(int)
@@ -73,15 +127,19 @@ class OneHotAction(gym.Wrapper):
         return reference
 
 
-class RewardObs(gym.Wrapper):
+class RewardObs(BaseWrapper):
     def __init__(self, env):
         super().__init__(env)
-        spaces = self.env.observation_space.spaces
-        if "obs_reward" not in spaces:
-            spaces["obs_reward"] = gym.spaces.Box(
+        obs_spaces = dict(self.env.observation_space.spaces)
+        if "obs_reward" not in obs_spaces:
+            obs_spaces["obs_reward"] = spaces.Box(
                 -np.inf, np.inf, shape=(1,), dtype=np.float32
             )
-        self.observation_space = gym.spaces.Dict(spaces)
+        self._observation_space = spaces.Dict(obs_spaces)
+
+    @property
+    def observation_space(self):
+        return self._observation_space
 
     def step(self, action):
         obs, reward, done, info = self.env.step(action)
@@ -96,7 +154,7 @@ class RewardObs(gym.Wrapper):
         return obs
 
 
-class SelectAction(gym.Wrapper):
+class SelectAction(BaseWrapper):
     def __init__(self, env, key):
         super().__init__(env)
         self._key = key
@@ -105,7 +163,7 @@ class SelectAction(gym.Wrapper):
         return self.env.step(action[self._key])
 
 
-class UUID(gym.Wrapper):
+class UUID(BaseWrapper):
     def __init__(self, env):
         super().__init__(env)
         timestamp = datetime.datetime.now().strftime("%Y%m%dT%H%M%S")

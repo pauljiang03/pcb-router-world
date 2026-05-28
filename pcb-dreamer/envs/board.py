@@ -8,6 +8,10 @@ Board data comes from TE Connectivity AutoLayout_Example01 Excel/PowerPoint.
 Starting-point spacing is adjusted to exactly satisfy the minimum trace-to-
 trace clearance constraint (original 0.9mm spacing violates it; we use
 TRACE_TO_TRACE_MIN + TRACE_WIDTH ≈ 1.3286mm).
+
+When a seed is provided, the connector cluster (NRZ, UPTHs, tab pads,
+starting traces) is shifted to a random position on the board while
+maintaining minimum margin from all edges.
 """
 
 import numpy as np
@@ -101,6 +105,9 @@ TP_TO_CONNECTOR_MIN = 3.0   # mm, center-to-edge (from PCB Routine Material)
 # Minimum center-to-center trace spacing that satisfies edge-to-edge clearance.
 TRACE_MIN_CENTER_TO_CENTER = TRACE_TO_TRACE_MIN + TRACE_WIDTH  # 1.3286mm
 
+# Fixed action-space size so it stays constant across board geometries.
+MAX_CANDIDATES = 200
+
 
 def _respaced_x(original_x: List[float], min_spacing: float) -> List[float]:
     """
@@ -118,7 +125,7 @@ def _respaced_x(original_x: List[float], min_spacing: float) -> List[float]:
     return new_x
 
 
-def load_te_example(num_traces: int = 10) -> BoardSpec:
+def load_te_example(num_traces: int = 10, seed: int = None) -> BoardSpec:
     """
     Load the TE AutoLayout Example01 board.
 
@@ -129,6 +136,10 @@ def load_te_example(num_traces: int = 10) -> BoardSpec:
     Args:
         num_traces: how many traces to include (1–10). Top row first,
                     then bottom row.
+        seed:       if provided, the connector cluster (NRZ, obstacles,
+                    starting traces) is shifted to a random position on
+                    the board, giving each seed a different layout while
+                    preserving internal geometry.
     """
     board = BoardSpec(
         origin_x=0.0,
@@ -138,11 +149,43 @@ def load_te_example(num_traces: int = 10) -> BoardSpec:
     )
 
     # ------------------------------------------------------------------
-    # Obstacles (exact TE data)
+    # Compute random offset for the connector cluster
+    # ------------------------------------------------------------------
+    # Original cluster reference positions (absolute coords)
+    # Connector outline: (55.0, 104.5) with size (24.0, 12.0)
+    # Cluster center:
+    _orig_conn_x = 55.0
+    _orig_conn_y = 104.5
+    _orig_conn_w = 24.0
+    _orig_conn_h = 12.0
+
+    # Margin from board edge to keep the cluster fully inside
+    _edge_margin = 10.0  # mm
+
+    if seed is not None:
+        rng = np.random.RandomState(seed)
+
+        # Valid range for the connector's bottom-left corner
+        x_lo = board.x_min + _edge_margin
+        x_hi = board.x_max - _orig_conn_w - _edge_margin
+        y_lo = board.y_min + _edge_margin
+        y_hi = board.y_max - _orig_conn_h - _edge_margin
+
+        new_conn_x = rng.uniform(x_lo, x_hi)
+        new_conn_y = rng.uniform(y_lo, y_hi)
+
+        dx = new_conn_x - _orig_conn_x
+        dy = new_conn_y - _orig_conn_y
+    else:
+        dx = 0.0
+        dy = 0.0
+
+    # ------------------------------------------------------------------
+    # Obstacles (exact TE data, shifted by dx/dy)
     # ------------------------------------------------------------------
 
     # Non-routing zone: bottom-left (58.294, 108.044), 17.8 × 6.64 mm
-    nrz_x, nrz_y, nrz_w, nrz_h = 58.294, 108.044, 17.8, 6.64
+    nrz_x, nrz_y, nrz_w, nrz_h = 58.294 + dx, 108.044 + dy, 17.8, 6.64
     board.rect_obstacles.append(Obstacle(
         cx=nrz_x + nrz_w / 2,
         cy=nrz_y + nrz_h / 2,
@@ -153,36 +196,36 @@ def load_te_example(num_traces: int = 10) -> BoardSpec:
 
     # UPTHs
     board.circ_obstacles.append(CircularObstacle(
-        cx=58.194, cy=105.894, radius=1.9 / 2,
+        cx=58.194 + dx, cy=105.894 + dy, radius=1.9 / 2,
         clearance=TRACE_TO_UPTH_MIN, name="UPTH_1",
     ))
     board.circ_obstacles.append(CircularObstacle(
-        cx=76.194, cy=105.894, radius=1.9 / 2,
+        cx=76.194 + dx, cy=105.894 + dy, radius=1.9 / 2,
         clearance=TRACE_TO_UPTH_MIN, name="UPTH_2",
     ))
 
     # Tab pads: bottom-left corners given, convert to center
     board.rect_obstacles.append(Obstacle(
-        cx=56.151 + 1.526 / 2, cy=113.346 + 1.216 / 2,
+        cx=56.151 + dx + 1.526 / 2, cy=113.346 + dy + 1.216 / 2,
         width=1.526, height=1.216,
         clearance=TRACE_TO_TABPAD_MIN, name="tab_pad_1",
     ))
     board.rect_obstacles.append(Obstacle(
-        cx=76.711 + 1.526 / 2, cy=113.346 + 1.216 / 2,
+        cx=76.711 + dx + 1.526 / 2, cy=113.346 + dy + 1.216 / 2,
         width=1.526, height=1.216,
         clearance=TRACE_TO_TABPAD_MIN, name="tab_pad_2",
     ))
 
     # Connector outline (encompasses NRZ + tab pads + UPTH region)
-    board.connector_x = 55.0
-    board.connector_y = 104.5
-    board.connector_w = 24.0
-    board.connector_h = 12.0
+    board.connector_x = _orig_conn_x + dx
+    board.connector_y = _orig_conn_y + dy
+    board.connector_w = _orig_conn_w
+    board.connector_h = _orig_conn_h
 
     # ------------------------------------------------------------------
     # Starting points — 5 per row, centered within the non-routing zone
     # ------------------------------------------------------------------
-    # NRZ center x = 58.294 + 17.8/2 = 67.194
+    # NRZ center x = nrz_x + nrz_w/2
     nrz_cx = nrz_x + nrz_w / 2
     n_per_row = 5
     min_sp = TRACE_MIN_CENTER_TO_CENTER
@@ -191,8 +234,8 @@ def load_te_example(num_traces: int = 10) -> BoardSpec:
     start_xs = [nrz_cx + (i - (n_per_row - 1) / 2) * min_sp
                 for i in range(n_per_row)]
 
-    top_y = 107.9436   # just below NRZ bottom
-    bot_y = 114.7446   # just above NRZ top
+    top_y = 107.9436 + dy   # just below NRZ bottom
+    bot_y = 114.7446 + dy   # just above NRZ top
     breakout = 0.8626
 
     all_traces = []
@@ -213,11 +256,16 @@ def load_te_example(num_traces: int = 10) -> BoardSpec:
     return board
 
 
-def generate_candidate_grid(board: BoardSpec, resolution: float = 6.5) -> np.ndarray:
+def generate_candidate_grid(board: BoardSpec, resolution: float = 6.5,
+                            max_candidates: int = MAX_CANDIDATES
+                            ) -> Tuple[np.ndarray, int]:
     """
     Generate valid test point candidate positions.
 
-    Returns array of shape (N, 2) with (x, y) positions.
+    Returns:
+        candidates: array of shape (max_candidates, 2) with (x, y) positions,
+                    padded with (x_min, y_min) entries beyond the real count.
+        real_count: number of genuine (non-padding) candidates.
     """
     candidates = []
 
@@ -234,7 +282,17 @@ def generate_candidate_grid(board: BoardSpec, resolution: float = 6.5) -> np.nda
             if _is_valid_tp_position(board, x, y):
                 candidates.append((x, y))
 
-    return np.array(candidates, dtype=np.float64)
+    # Truncate if too many
+    if len(candidates) > max_candidates:
+        candidates = candidates[:max_candidates]
+
+    real_count = len(candidates)
+
+    # Pad to fixed size with dummy entries
+    while len(candidates) < max_candidates:
+        candidates.append((board.x_min, board.y_min))
+
+    return np.array(candidates, dtype=np.float64), real_count
 
 
 def _is_valid_tp_position(board: BoardSpec, x: float, y: float) -> bool:

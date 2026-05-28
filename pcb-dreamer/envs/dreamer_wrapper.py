@@ -1,7 +1,6 @@
-"""Wrapper for DreamerV3 compatibility (old gym API + dict obs)."""
+"""Wrapper for DreamerV3 compatibility (old-style 4-return step + dict obs)."""
 
-import gym
-import gym.spaces
+import gymnasium.spaces as spaces
 import numpy as np
 from envs.pcb_env import TPPlacementEnv
 
@@ -10,23 +9,26 @@ class PCBDreamerEnv:
     metadata = {}
 
     def __init__(self, num_traces=8, seed=0):
-        self._inner = TPPlacementEnv(num_traces=num_traces)
+        self._inner = TPPlacementEnv(num_traces=num_traces, seed=seed)
         self._seed = seed
         self.reward_range = [-np.inf, np.inf]
 
     @property
     def observation_space(self):
-        return gym.spaces.Dict({
-            "image": gym.spaces.Box(0, 255, (64, 64, 3), dtype=np.uint8),
-            "is_first": gym.spaces.Box(0, 1, (), dtype=np.uint8),
-            "is_last": gym.spaces.Box(0, 1, (), dtype=np.uint8),
-            "is_terminal": gym.spaces.Box(0, 1, (), dtype=np.uint8),
+        return spaces.Dict({
+            "image": spaces.Box(0, 255, (64, 64, 3), dtype=np.uint8),
+            "is_first": spaces.Box(0, 1, (), dtype=np.uint8),
+            "is_last": spaces.Box(0, 1, (), dtype=np.uint8),
+            "is_terminal": spaces.Box(0, 1, (), dtype=np.uint8),
         })
 
     @property
     def action_space(self):
-        space = gym.spaces.Discrete(self._inner.num_candidates)
+        space = spaces.Box(low=0, high=1,
+                           shape=(self._inner.num_candidates,),
+                           dtype=np.float32)
         space.discrete = True
+        space.n = self._inner.num_candidates
         return space
 
     def reset(self):

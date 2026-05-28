@@ -203,7 +203,7 @@ def simulate(
             # logging for done episode
             for i in indices:
                 save_episodes(directory, {envs[i].id: cache[envs[i].id]})
-                length = len(cache[envs[i].id]["reward"]) - 1
+                ep_length = len(cache[envs[i].id]["reward"]) - 1
                 score = float(np.array(cache[envs[i].id]["reward"]).sum())
                 video = cache[envs[i].id].get("image", [np.zeros((4,4,3), dtype=np.uint8)])
                 # record logs given from environments
@@ -219,7 +219,7 @@ def simulate(
                     step_in_dataset = erase_over_episodes(cache, limit)
                     logger.scalar(f"dataset_size", step_in_dataset)
                     logger.scalar(f"train_return", score)
-                    logger.scalar(f"train_length", length)
+                    logger.scalar(f"train_length", ep_length)
                     logger.scalar(f"train_episodes", len(cache))
                     logger.write(step=logger.step)
                 else:
@@ -229,15 +229,15 @@ def simulate(
                         eval_done = False
                     # start counting scores for evaluation
                     eval_scores.append(score)
-                    eval_lengths.append(length)
+                    eval_lengths.append(ep_length)
 
-                    score = sum(eval_scores) / len(eval_scores)
-                    length = sum(eval_lengths) / len(eval_lengths)
+                    avg_score = sum(eval_scores) / len(eval_scores)
+                    avg_length = sum(eval_lengths) / len(eval_lengths)
                     logger.video(f"eval_policy", np.array(video)[None])
 
                     if len(eval_scores) >= episodes and not eval_done:
-                        logger.scalar(f"eval_return", score)
-                        logger.scalar(f"eval_length", length)
+                        logger.scalar(f"eval_return", avg_score)
+                        logger.scalar(f"eval_length", avg_length)
                         logger.scalar(f"eval_episodes", len(eval_scores))
                         logger.write(step=logger.step)
                         eval_done = True

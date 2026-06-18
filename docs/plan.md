@@ -107,24 +107,24 @@ The DreamerV3+FR paper uses identical dreamerv3-torch source code with NO modifi
 ## 6. Project Structure
 
 ```
-pcb-router-world/             # repo root (flattened — was pcb-dreamer/)
-├── envs/
-│   ├── board.py              ← board data, candidate grid, constraints
-│   ├── routing.py            ← A* pathfinding
+pcb-router-world/             # repo root
+├── envs/                     # custom PCB environment
+│   ├── board.py              ← board data, central 20-trace layout, candidate grid
+│   ├── routing.py            ← octilinear planar router + length-matching meander
 │   ├── pcb_env.py            ← Gymnasium env (renders 64×64 image obs)
 │   ├── dreamer_wrapper.py    ← old-gym dict wrapper for DreamerV3
-│   ├── visualize.py          ← 2D matplotlib plotting
-│   └── wrappers.py           ← FROM dreamerv3-torch
-├── dreamer.py                ← FROM dreamerv3-torch
-├── models.py                 ← FROM dreamerv3-torch (1 small edit)
-├── networks.py               ← FROM dreamerv3-torch (1 small edit)
-├── tools.py                  ← FROM dreamerv3-torch (4 small edits)
-├── exploration.py            ← FROM dreamerv3-torch (as-is)
-├── parallel.py               ← FROM dreamerv3-torch (as-is)
-├── configs.yaml              ← our config
-├── train.py                  ← entry point
-├── test_env.py               ← tests
-└── requirements.txt
+│   ├── visualize.py          ← PIL + matplotlib plotting
+│   └── wrappers.py           ← lightweight env wrappers (pure gymnasium)
+├── dreamerv3/                # forked dreamerv3-torch engine (relative imports)
+│   ├── dreamer.py  models.py  networks.py  tools.py  exploration.py  parallel.py
+│   └── __init__.py
+├── train.py                  ← training entry point
+├── eval.py                   ← baselines + metrics (A* / FreeRouting)
+├── configs.yaml  requirements.txt  conftest.py
+├── tests/                    ← test_pcb.py (pytest)
+├── scripts/                  ← viz_obs.py, gen_ordering_data.py
+├── docs/                     ← method.md, plan.md, EVALUATION.md, IMPROVEMENTS.md, ROUTING.md
+└── eval_results/             ← figures
 ```
 
 ### Approach: Fork dreamerv3-torch Source

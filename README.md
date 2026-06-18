@@ -10,27 +10,31 @@ The core contribution is framing test point placement as a **generative co-desig
 
 ## Quickstart
 
-The repo is flat: source lives at the repo root (`envs/`, `train.py`, …).
+Layout: `envs/` (custom PCB environment) · `dreamerv3/` (forked DreamerV3 engine) ·
+`train.py` / `eval.py` (entry points) · `tests/` · `docs/` · `scripts/` (utilities) ·
+`eval_results/` (figures).
 
 ```bash
 pip install -r requirements.txt
 
 # Fast checks (no GPU, no training):
-python -m pytest test_pcb.py -q                       # unit tests
-python eval.py --episodes 5 --num_traces 10 --no-plot # A* baselines (metrics only)
+python -m pytest tests/ -q                              # unit tests
+python eval.py --episodes 5 --num_traces 20 --no-plot   # baselines (metrics only)
 
 # Sanity-check the full Dreamer pipeline on CPU (short):
 python train.py --configs defaults debug --device cpu
 
 # Full training (GPU):
-python train.py --configs defaults --device cuda:0 --num_traces 8
+python train.py --configs defaults --device cuda:0 --num_traces 20
 ```
 
-**Router:** A* is the default for training (fast, pure-NumPy, deterministic).
-FreeRouting is opt-in for high-fidelity evaluation only (`eval.py --freerouting`;
-needs Java + `freerouting.jar`).
+**Router:** octilinear (45°) negotiated rip-up-and-reroute, **planar by
+construction** (no trace crossings), with test-point pad keep-out and a
+length-matching meander. A* is the in-repo default; FreeRouting is opt-in
+(`eval.py --freerouting`; needs Java + `freerouting.jar`). See `docs/ROUTING.md`.
 
-See `EVALUATION.md` for a code review and `IMPROVEMENTS.md` for the work plan.
+See `docs/EVALUATION.md` (code review), `docs/IMPROVEMENTS.md` (work plan), and
+`docs/ROUTING.md` (router design + learned-routing approaches).
 
 ---
 

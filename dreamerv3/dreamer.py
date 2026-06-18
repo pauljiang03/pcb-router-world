@@ -9,13 +9,11 @@ os.environ["MUJOCO_GL"] = "osmesa"
 import numpy as np
 import ruamel.yaml as yaml
 
-sys.path.append(str(pathlib.Path(__file__).parent))
-
-import exploration as expl
-import models
-import tools
+from . import exploration as expl
+from . import models
+from . import tools
 import envs.wrappers as wrappers
-from parallel import Parallel, Damy
+from .parallel import Parallel, Damy
 
 import torch
 from torch import nn

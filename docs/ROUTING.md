@@ -234,10 +234,13 @@ jointly over placement and the routing subgoals that make it manufacturable.**
 
 ## 8. Reproduce
 ```bash
-python -m pytest test_pcb.py -q               # router + env regression (11 tests)
-python eval.py --num_traces 20 --no-plot      # baselines on the 20-trace board (A*)
+python -m pytest tests/ -q                    # router + env regression (14 tests)
+python eval.py --num_traces 20 --no-plot      # baselines + Planar on the 20-trace board
+python scripts/gen_ordering_data.py --boards 8 --orders 12   # §4.1 distillation dataset
 ```
 The §1–§3 / §6 experiments (isolation, order-variance, multi-start, fan-vs-greedy
 benchmark) were run as standalone CPU scripts against `envs/routing.py` and
 `envs/board.py`; each is a few lines using `route_all_traces` and the internal
-`_negotiate`/`_astar_cost` helpers.
+`_negotiate`/`_astar_cost` helpers. `scripts/gen_ordering_data.py` is the §4.1
+data generator: it records the best routing order per board (free labels from
+multi-start) for a learned ordering policy.

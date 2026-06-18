@@ -16,7 +16,7 @@ matters). Effort tags: **S** ≈ <1h, **M** ≈ a few hours, **L** ≈ a day+.
 guardrail · P0.3 *quick* (reward-only masking + guardrail; docs corrected) ·
 P0.4 A* default (**router decision: A\* for training, FreeRouting eval-only**) ·
 P1.2 held-out eval seeds · P2 router accuracy (uniform resampling) · P2 tests
-(`test_pcb.py`, 11 passing) · P2 eval runs without matplotlib (`--no-plot`) ·
+(`tests/`, 14 passing) · P2 eval runs without matplotlib (`--no-plot`) ·
 P2 docs. Reward components are now logged in `info["reward_components"]`, and the
 eval validity metric now requires `failures==0`.
 

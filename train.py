@@ -22,13 +22,13 @@ from torch import distributions as torchd
 # Prevent PyTorch distribution validation errors on discrete actions
 torch.distributions.Distribution.set_default_validate_args(False)
 
-import exploration as expl
-import models
-import tools
+from dreamerv3 import exploration as expl
+from dreamerv3 import models
+from dreamerv3 import tools
 from envs import wrappers
 from envs.dreamer_wrapper import PCBDreamerEnv
-from parallel import Parallel, Damy
-from dreamer import Dreamer
+from dreamerv3.parallel import Parallel, Damy
+from dreamerv3.dreamer import Dreamer
 
 to_np = lambda x: x.detach().cpu().numpy()
 

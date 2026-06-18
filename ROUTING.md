@@ -105,6 +105,15 @@ job; the router guarantees a legal planar result or drops the offending nets. (4
 is ~25 % shorter than pure-rectilinear; the remaining length is recovered by
 placement quality, not by letting traces cross.)
 
+### 2.6 Endpoint (pad) clearance & no self-encirclement
+Each test point is a pad, not just a trace end, so the router reserves a small
+keep-out disk (radius `TP_CLEARANCE_CELLS`) around every pad that **only that pad's
+own net may enter** — keeping every pad clear of all *other* traces' bodies and of
+other pads (measured min pad-to-other-trace ≈ **3 mm** vs the ~1.3 mm trace pitch;
+tunable). `validate_routing_constraints` reports `tp_to_trace_min`. The Stage-3
+meander also refuses to add bumps within a few cells of either endpoint, so **a
+trace never surrounds its own pad** with its own body.
+
 *Tradeoff:* multi-start costs ~`n_starts`× A* runs. It's tunable
 (`route_all_traces(..., n_starts=)`); training can use a small value and
 evaluation a larger one.

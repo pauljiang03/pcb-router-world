@@ -146,6 +146,28 @@ def test_training_env_wrapper_chain():
     assert "reward_components" in info
 
 
+def test_pad_keepout_from_other_traces():
+    """Each test pad keeps a keep-out clear of every OTHER trace's body (endpoint-
+    to-other-trace-body clearance), well beyond the 1-cell trace-to-trace minimum."""
+    from envs.routing import validate_routing_constraints, CELL_SIZE
+    b = load_te_example(num_traces=16, seed=1)
+    c, rc = generate_candidate_grid(b, 6.5); c = c[:rc]
+    ccx = b.connector_x + b.connector_w / 2; ccy = b.connector_y + b.connector_h / 2
+    chosen = []
+    for idx in np.argsort(-np.hypot(c[:, 0] - ccx, c[:, 1] - ccy)):
+        if len(chosen) >= 16: break
+        if check_tp_spacing(chosen, *c[idx]): chosen.append(tuple(c[idx]))
+    tps = sorted(chosen, key=lambda p: np.arctan2(p[1] - ccy, p[0] - ccx))
+    pins = sorted(range(16), key=lambda i: np.arctan2(b.traces[i].start_y - ccy,
+                                                      b.traces[i].start_x - ccx))
+    placed = [None] * 16
+    for k, i in enumerate(pins):
+        placed[i] = tps[k]
+    paths, _, _ = route_all_traces(b, placed)
+    v = validate_routing_constraints(b, paths)
+    assert v["tp_to_trace_min"] >= 1.5 * CELL_SIZE   # pad keep-out (> 1 cell)
+
+
 def test_length_matching_is_crossing_safe_and_equalizes():
     """Stage 3 (equalize_lengths) meanders shorter traces toward the longest
     without ever introducing a crossing, and does not worsen length spread."""

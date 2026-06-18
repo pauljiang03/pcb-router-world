@@ -269,11 +269,13 @@ def _diag_key(r, c, nr, nc):
 
 
 def _astar_cost(blocked, cell_cost, diag_present, diag_hist, rows, cols, start, end,
-                present_penalty):
+                present_penalty, tp_owner=None, net_id=-1):
     """Octilinear A* on a (row, col) grid. `blocked` hard-blocks cells; `cell_cost`
     adds per-cell congestion; a diagonal move additionally pays for crossing the
-    complementary diagonal of its unit square (discouraging X-crossings). Uses an
-    octile heuristic. Returns a list of (row, col) cells, or None."""
+    complementary diagonal of its unit square (discouraging X-crossings). If
+    `tp_owner` is given, a cell inside another net's test-point keep-out is blocked
+    — a net may enter only its own pad's keep-out. Octile heuristic; returns cells
+    or None."""
     g = {start: 0.0}
     came = {}
     pq = [(0.0, start)]
@@ -295,6 +297,8 @@ def _astar_cost(blocked, cell_cost, diag_present, diag_hist, rows, cols, start, 
             nr, nc = r + dr, c + dc
             if not (0 <= nr < rows and 0 <= nc < cols) or blocked[nr, nc] or (nr, nc) in seen:
                 continue
+            if tp_owner is not None and tp_owner[nr, nc] >= 0 and tp_owner[nr, nc] != net_id:
+                continue                       # keep clear of other nets' test pads
             if dr and dc:
                 if blocked[r, nc] and blocked[nr, c]:
                     continue                       # don't cut the corner between obstacles
@@ -319,7 +323,7 @@ def _astar_cost(blocked, cell_cost, diag_present, diag_hist, rows, cols, start, 
 # ------------------------------------------------------------------
 
 def _negotiate(blocked, rows, cols, cells, endpoints, order,
-               max_iters, present_penalty, history_inc):
+               max_iters, present_penalty, history_inc, tp_owner=None):
     """One negotiated rip-up-and-reroute run, processing nets in `order`.
 
     Nets may share cells (and complementary diagonals) provisionally at a penalty;
@@ -344,7 +348,7 @@ def _negotiate(blocked, rows, cols, cells, endpoints, order,
                     diag_present[key] -= 1
             cost = history + present_penalty * present
             p = _astar_cost(blocked, cost, diag_present, diag_hist, rows, cols,
-                            cells[i][0], cells[i][1], present_penalty)
+                            cells[i][0], cells[i][1], present_penalty, tp_owner, i)
             routes[i] = p
             net_diags[i] = []
             if p:
@@ -483,6 +487,26 @@ def route_all_traces(
         endpoints.add(s)
         endpoints.add(e)
 
+    # Test-point keep-out: each pad reserves a small disk that OTHER nets may not
+    # enter (endpoint-to-other-trace-body and endpoint-to-endpoint clearance); a net
+    # may enter only its own pad's disk. Pads are >=13mm apart so disks never
+    # overlap. Start/escape cells are exempt so a trace's escape is never boxed in.
+    tp_owner = -np.ones((rows, cols), dtype=np.int32)
+    rad = TP_CLEARANCE_CELLS
+    for i, (_s, (er, ec)) in enumerate(cells):
+        for dr in range(-rad, rad + 1):
+            for dc in range(-rad, rad + 1):
+                if dr * dr + dc * dc <= rad * rad:
+                    rr, cc = er + dr, ec + dc
+                    if 0 <= rr < rows and 0 <= cc < cols:
+                        tp_owner[rr, cc] = i
+    for (sr, sc), _e in cells:
+        step_dir = 1 if sr > crow else -1
+        for j in range(6):
+            rr = sr + step_dir * j
+            if 0 <= rr < rows:
+                tp_owner[rr, sc] = -1
+
     # Multi-start: informed orders first, then deterministic random restarts. Each
     # run is negotiated, then any residual crossing is removed (planar guarantee);
     # keep the routing with the fewest dropped nets, early-exit on a full routing.
@@ -497,7 +521,7 @@ def route_all_traces(
     for k in range(max(1, n_starts)):
         order = informed[k] if k < len(informed) else list(rng.permutation(n))
         routes = _negotiate(blocked, rows, cols, cells, endpoints, order,
-                            max_iters, present_penalty, history_inc)
+                            max_iters, present_penalty, history_inc, tp_owner)
         routes = _remove_crossings(routes, cells, rows, cols, grid)
         fails = sum(1 for rt in routes if rt is None)
         if best_fails is None or fails < best_fails:
@@ -579,12 +603,20 @@ def equalize_lengths(board, paths_world, passes=24, tol=1.0):
                 break
             new = [p[0]]
             progressed = False
+            endpt, startpt = p[-1], p[0]
+            keep = TP_CLEARANCE_CELLS + 1        # clean approach; never wrap a pad
             for k in range(len(p) - 1):
                 A, N = p[k], p[k + 1]
                 dr, dc = N[0] - A[0], N[1] - A[1]
-                # Insert a bump only while we still need length (stop at target —
-                # each bump adds exactly 2 cells, so we never overshoot by >1 bump).
-                if added_total < need - tol and (dr == 0) != (dc == 0):
+                near_end = (max(abs(A[0] - endpt[0]), abs(A[1] - endpt[1])) <= keep or
+                            max(abs(N[0] - endpt[0]), abs(N[1] - endpt[1])) <= keep or
+                            max(abs(A[0] - startpt[0]), abs(A[1] - startpt[1])) <= keep or
+                            max(abs(N[0] - startpt[0]), abs(N[1] - startpt[1])) <= keep)
+                # Insert a bump only while we still need length (stop at target — each
+                # bump adds exactly 2 cells, so we never overshoot by >1 bump) and
+                # never within `keep` cells of an endpoint, so a trace never
+                # surrounds its own pad (or its start) with its own body.
+                if added_total < need - tol and (dr == 0) != (dc == 0) and not near_end:
                     perps = [(1, 0), (-1, 0)] if dr == 0 else [(0, 1), (0, -1)]
                     for pr, pc in perps:
                         B = (A[0] + pr, A[1] + pc)
@@ -711,7 +743,22 @@ def validate_routing_constraints(
                                    f"Traces {vi[a]},{vi[b]}: edge dist {mee:.3f}mm"))
 
     crossings = count_crossings(paths)
+
+    # Test-point (pad) to other-trace-body clearance: each pad should stay clear of
+    # every trace except its own (the pad keep-out the router enforces).
+    tp2trace_min = float('inf')
+    for i, pi in enumerate(paths):
+        if not pi:
+            continue
+        tp = np.asarray(pi[-1])
+        for j, pj in enumerate(paths):
+            if pj is None or j == i:
+                continue
+            arr = np.asarray(pj)
+            tp2trace_min = min(tp2trace_min,
+                               float(np.hypot(arr[:, 0] - tp[0], arr[:, 1] - tp[1]).min()))
+
     return {"violations": violations, "trace_to_trace_min": t2t_min,
             "trace_to_edge_min": t2e_min, "trace_to_obstacle_min": t2o_min,
-            "crossings": crossings,
+            "crossings": crossings, "tp_to_trace_min": tp2trace_min,
             "all_valid": len(violations) == 0 and crossings == 0}

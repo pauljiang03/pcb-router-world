@@ -7,14 +7,22 @@ After all TPs are placed, a validation loop routes all traces
 and computes the reward.
 
 Two routing modes:
-  - A* (default): fast cell-based router for training (~100ms)
-  - FreeRouting: industry autorouter for evaluation (~3s)
+  - A* (DEFAULT): fast cell-based router for training (~100ms). No external
+    dependencies — chosen as the standard router for both training and the
+    no-dependency path.
+  - FreeRouting: industry autorouter for optional high-fidelity evaluation
+    (~3s, requires Java + freerouting.jar). Opt-in only via use_freerouting=True.
 
 Observation: 64x64x3 uint8 image.
   Red:   obstacles + clearance zones + board edge
   Green: placed test points + exclusion zones + routed traces
   Blue:  current trace starting point + valid remaining candidates
 Action: discrete index into candidate grid (fixed size MAX_CANDIDATES).
+
+Note on action masking: the candidate_mask is maintained internally and used
+to (a) penalize invalid picks (-2 reward) and (b) snap an invalid pick to the
+nearest still-valid candidate so a junk corner TP is never placed. The mask is
+NOT yet exposed to the agent as -inf logits (see IMPROVEMENTS.md P0.3).
 """
 
 import gymnasium as gym
@@ -39,7 +47,7 @@ class TPPlacementEnv(gym.Env):
         board: Optional[BoardSpec] = None,
         num_traces: int = 10,
         candidate_resolution: float = 6.5,
-        use_freerouting: bool = True,
+        use_freerouting: bool = False,
         render_mode: Optional[str] = None,
         seed: int = 0,
     ):
@@ -49,6 +57,7 @@ class TPPlacementEnv(gym.Env):
         self._num_traces_requested = num_traces
         self._candidate_resolution = candidate_resolution
         self._board_seed = seed
+        self._board_given = board is not None
 
         if board is None:
             board = load_te_example(num_traces=num_traces, seed=seed)
@@ -66,9 +75,7 @@ class TPPlacementEnv(gym.Env):
             0, 255, (IMG_SIZE, IMG_SIZE, 3), dtype=np.uint8
         )
 
-        # Coordinate transform
-        self._x_scale = (IMG_SIZE - 1) / max(self.board.width, 1e-6)
-        self._y_scale = (IMG_SIZE - 1) / max(self.board.height, 1e-6)
+        self._update_scales()
 
         self.placed_tps: List[Tuple[float, float]] = []
         self.current_trace: int = 0
@@ -79,8 +86,13 @@ class TPPlacementEnv(gym.Env):
         # Filled after validation
         self.routed_paths = None
         self.routed_lengths = None
+        self._reward_components: dict = {}
 
     # ---- coordinate / drawing helpers ----
+
+    def _update_scales(self):
+        self._x_scale = (IMG_SIZE - 1) / max(self.board.width, 1e-6)
+        self._y_scale = (IMG_SIZE - 1) / max(self.board.height, 1e-6)
 
     def _w2p(self, x: float, y: float) -> Tuple[int, int]:
         px = int((x - self.board.x_min) * self._x_scale)
@@ -165,6 +177,19 @@ class TPPlacementEnv(gym.Env):
                 if not check_tp_spacing(self.placed_tps, cx, cy):
                     self.candidate_mask[i] = False
 
+    def _nearest_valid_candidate(self, action: int) -> int:
+        """Map an invalid/padding action to the nearest still-valid real
+        candidate so a junk corner TP is never placed. Falls back to the
+        nearest real candidate if none remain valid (never returns padding)."""
+        ref = self.candidates[action]
+        valid = np.where(self.candidate_mask[:self._real_count])[0]
+        pool = valid if len(valid) else np.arange(self._real_count)
+        if len(pool) == 0:
+            return action
+        d = ((self.candidates[pool, 0] - ref[0]) ** 2 +
+             (self.candidates[pool, 1] - ref[1]) ** 2)
+        return int(pool[int(np.argmin(d))])
+
     # ---- validation (runs after all TPs placed) ----
 
     def _validate(self) -> float:
@@ -196,23 +221,24 @@ class TPPlacementEnv(gym.Env):
         self.routed_lengths = lengths
 
         reward = 0.0
+        comp = {}
 
         # Routability
-        if failures == 0:
-            reward += 15.0
-        else:
-            reward -= 10.0 * failures
+        comp["routable"] = 15.0 if failures == 0 else -10.0 * failures
+        reward += comp["routable"]
 
         # Trace lengths
         finite = [l for l in lengths if l < float('inf')]
         if finite:
             diag = np.hypot(self.board.width, self.board.height)
             # Minimize total length
-            reward -= 5.0 * sum(finite) / (len(finite) * diag)
+            comp["length"] = -5.0 * sum(finite) / (len(finite) * diag)
+            reward += comp["length"]
             # Length matching
             if len(finite) > 1:
                 spread = (max(finite) - min(finite)) / max(np.mean(finite), 1e-6)
-                reward -= 80.0 * spread
+                comp["spread"] = -80.0 * spread
+                reward += comp["spread"]
 
         # TP spacing quality
         if len(self.placed_tps) > 1:
@@ -221,34 +247,56 @@ class TPPlacementEnv(gym.Env):
                 for i, a in enumerate(self.placed_tps)
                 for b in self.placed_tps[i + 1:]
             )
-            reward += 2.0 * min(min_sp / TP_TO_TP_MIN, 2.0)
+            comp["spacing"] = 2.0 * min(min_sp / TP_TO_TP_MIN, 2.0)
+            reward += comp["spacing"]
 
+        # Per-component breakdown for reward-balance diagnostics (see IMPROVEMENTS P1.1)
+        self._reward_components = comp
         return reward
 
     # ---- gym interface ----
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
+        # Regenerate the board layout for this episode so different seeds give
+        # different layouts (board randomization). Skipped when an explicit
+        # board was passed in or no seed is given.
+        if seed is not None and not self._board_given:
+            self.board = load_te_example(
+                num_traces=self._num_traces_requested, seed=seed
+            )
+            self.num_traces = min(self._num_traces_requested, len(self.board.traces))
+            self.board.traces = self.board.traces[:self.num_traces]
+            self.candidates, self._real_count = generate_candidate_grid(
+                self.board, self._candidate_resolution, MAX_CANDIDATES
+            )
+            self._update_scales()
+
         self.placed_tps = []
         self.current_trace = 0
         self.candidate_mask = np.ones(self.num_candidates, dtype=bool)
         self.candidate_mask[self._real_count:] = False  # mask padding
         self.routed_paths = None
         self.routed_lengths = None
+        self._reward_components = {}
         return self._render_obs(), self._get_info()
 
     def step(self, action: int):
-        tp_x, tp_y = self.candidates[action]
+        action = int(action)
         reward = 0.0
 
-        # Per-step reward
+        # Per-step reward. Invalid (masked or padding) picks are penalized and
+        # snapped to the nearest still-valid candidate so we never place a junk
+        # corner TP.
         if not self.candidate_mask[action]:
             reward -= 2.0
-        elif check_tp_spacing(self.placed_tps, tp_x, tp_y):
+            action = self._nearest_valid_candidate(action)
+        elif check_tp_spacing(self.placed_tps, *self.candidates[action]):
             reward += 1.0
         else:
             reward -= 2.0
 
+        tp_x, tp_y = self.candidates[action]
         self.placed_tps.append((tp_x, tp_y))
         self.current_trace += 1
         self._update_candidate_mask()
@@ -274,6 +322,8 @@ class TPPlacementEnv(gym.Env):
             info["failures"] = sum(
                 1 for l in self.routed_lengths if l == float('inf')
             )
+        if self._reward_components:
+            info["reward_components"] = dict(self._reward_components)
         return info
 
     def render(self):

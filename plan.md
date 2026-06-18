@@ -107,7 +107,7 @@ The DreamerV3+FR paper uses identical dreamerv3-torch source code with NO modifi
 ## 6. Project Structure
 
 ```
-pcb-dreamer/
+pcb-router-world/             # repo root (flattened — was pcb-dreamer/)
 ├── envs/
 │   ├── board.py              ← board data, candidate grid, constraints
 │   ├── routing.py            ← A* pathfinding
@@ -373,15 +373,15 @@ torch.distributions.Distribution.set_default_validate_args(False)
 
 ## 12. Running on Colab
 
-1. Upload `pcb-dreamer/` folder to Google Drive
+1. Upload the `pcb-router-world/` folder to Google Drive
 2. Open Colab, select T4 GPU runtime
 3. Run:
 ```python
 from google.colab import drive
 drive.mount('/content/drive')
-!pip install torch ruamel.yaml einops gym numpy matplotlib tensorboard
-!cp -r "/content/drive/MyDrive/pcb-dreamer" /content/pcb-dreamer
-%cd /content/pcb-dreamer
+!pip install torch ruamel.yaml einops gymnasium numpy matplotlib tensorboard
+!cp -r "/content/drive/MyDrive/pcb-router-world" /content/pcb-router-world
+%cd /content/pcb-router-world
 !python train.py --logdir "/content/drive/MyDrive/pcb_results/run1" --device cuda:0 --steps 500000
 ```
 

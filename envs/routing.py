@@ -250,129 +250,220 @@ class RoutingGrid:
 
 
 # ------------------------------------------------------------------
-# Single-order routing (used internally by rip-up-and-retry)
+# Negotiated-congestion router internals
 # ------------------------------------------------------------------
 
-def _route_in_order(
-    board: BoardSpec,
-    test_points: List[Tuple[float, float]],
-    order: List[int],
-) -> Tuple[List[Optional[List[Tuple[float, float]]]], List[float], int]:
-    """Route traces in `order` on a fresh grid.  Returns (paths, lengths, failures)."""
-    grid = RoutingGrid(board)
+_NEG_NBR = [(-1, 0), (1, 0), (0, -1), (0, 1),
+            (-1, -1), (-1, 1), (1, -1), (1, 1)]
 
-    # Set up TP clearance zones for ALL test points
-    trace_indices = [board.traces[i].index for i in range(min(len(board.traces), len(test_points)))]
-    grid.set_test_points(trace_indices, test_points[:len(trace_indices)])
 
-    # Route in the given order
-    result_paths: Dict[int, Optional[List[Tuple[float, float]]]] = {}
-    result_lengths: Dict[int, float] = {}
-    failures = 0
-
-    for i in order:
-        if i >= len(board.traces) or i >= len(test_points):
+def _astar_cost(blocked, cost, rows, cols, start, end):
+    """A* on a (row, col) grid. `blocked` is a hard boolean mask; `cost` adds a
+    per-cell congestion penalty to each entered cell. Returns a list of
+    (row, col) cells from start to end, or None if unreachable."""
+    g = {start: 0.0}
+    came = {}
+    pq = [(0.0, start)]
+    seen = set()
+    er, ec = end
+    while pq:
+        _, cur = heapq.heappop(pq)
+        if cur in seen:
             continue
-        trace = board.traces[i]
-        tp_x, tp_y = test_points[i]
-        result = grid.find_path(trace.start_x, trace.start_y, tp_x, tp_y,
-                                trace_index=trace.index)
-        if result is None:
-            result_paths[i] = None
-            result_lengths[i] = float('inf')
-            failures += 1
-            grid._remaining_traces.discard(trace.index)
-        else:
-            grid_path, path_length = result
-            world_path = grid.path_to_world(grid_path)
-            result_paths[i] = world_path
-            result_lengths[i] = path_length + trace.breakout_length
-            grid.rasterize_trace_path(grid_path, trace.index)
-
-    # Reassemble in original trace order
-    n = min(len(board.traces), len(test_points))
-    paths = [result_paths.get(i) for i in range(n)]
-    lengths = [result_lengths.get(i, float('inf')) for i in range(n)]
-    return paths, lengths, failures
+        seen.add(cur)
+        if cur == end:
+            path = [cur]
+            while cur in came:
+                cur = came[cur]
+                path.append(cur)
+            return path[::-1]
+        r, c = cur
+        for dr, dc in _NEG_NBR:
+            nr, nc = r + dr, c + dc
+            if 0 <= nr < rows and 0 <= nc < cols and not blocked[nr, nc] and (nr, nc) not in seen:
+                step = 1.4142135624 if (dr and dc) else 1.0
+                ng = g[cur] + step + cost[nr, nc]
+                if ng < g.get((nr, nc), 1e18):
+                    g[(nr, nc)] = ng
+                    came[(nr, nc)] = cur
+                    heapq.heappush(pq, (ng + np.hypot(nr - er, nc - ec), (nr, nc)))
+    return None
 
 
 # ------------------------------------------------------------------
-# Public API: rip-up-and-retry routing
+# Public API: negotiated-congestion rip-up-and-reroute
 # ------------------------------------------------------------------
+
+def _negotiate(blocked, rows, cols, cells, endpoints, order,
+               max_iters, present_penalty, history_inc):
+    """One negotiated rip-up-and-reroute run, processing nets in `order`.
+
+    Nets may share cells provisionally at a congestion penalty; after each pass
+    a per-cell `history` cost accumulates on over-used cells, so contention
+    resolves over a few passes. Returns per-net cell paths ([(row,col),...] or
+    None)."""
+    n = len(cells)
+    history = np.zeros((rows, cols))
+    present = np.zeros((rows, cols), dtype=np.int32)
+    routes = [None] * n
+    for _ in range(max_iters):
+        for i in order:
+            if routes[i]:
+                for cell in routes[i]:
+                    present[cell] -= 1
+            cost = history + present_penalty * present
+            routes[i] = _astar_cost(blocked, cost, rows, cols, cells[i][0], cells[i][1])
+            if routes[i]:
+                for cell in routes[i]:
+                    present[cell] += 1
+        shared = [(r, c) for r, c in zip(*np.where(present > 1))
+                  if (r, c) not in endpoints]
+        if not shared:
+            break
+        for cell in shared:
+            history[cell] += history_inc
+    return routes
+
+
+def _score_routes(routes, cells, rows, cols):
+    """Return (failures, length_in_cells, present_grid). A net fails if it has no
+    path or shares a non-endpoint cell with another net."""
+    present = np.zeros((rows, cols), dtype=np.int32)
+    for rt in routes:
+        if rt:
+            for cell in rt:
+                present[cell] += 1
+    fails = 0
+    length_cells = 0.0
+    for i in range(len(routes)):
+        rt = routes[i]
+        if rt is None or any(present[c] > 1 and c not in cells[i] for c in rt):
+            fails += 1
+        elif rt:
+            length_cells += sum(np.hypot(rt[k + 1][0] - rt[k][0], rt[k + 1][1] - rt[k][1])
+                                for k in range(len(rt) - 1))
+    return fails, length_cells, present
+
 
 def route_all_traces(
     board: BoardSpec,
     test_points: List[Tuple[float, float]],
-    max_retries: int = 15,
+    max_iters: int = 40,
+    present_penalty: float = 3.0,
+    history_inc: float = 1.0,
+    n_starts: int = 8,
 ) -> Tuple[List[Optional[List[Tuple[float, float]]]], List[float], int]:
     """
-    Route all traces with rip-up-and-retry.
+    Route all traces with negotiated-congestion rip-up-and-reroute + multi-start.
 
-    Tries multiple routing orders and keeps the result with fewest failures:
-      1. Original order
-      2. Reverse
-      3. Shortest straight-line distance first
-      4. Longest distance first
-      5. Failed-traces-first (from best attempt so far)
-      6. Random shuffles
+    A feasible routing almost always exists on these boards (e.g. a radial fan on
+    a central connector); the difficulty is that one-shot sequential A* — route a
+    net, hard-block its corridor, move on — boxes later nets out of solutions that
+    demonstrably exist. Two mechanisms recover them:
+
+      1. Negotiated congestion: nets share cells provisionally at a penalty, then
+         iteratively rip up and reroute while a per-cell history cost accumulates
+         on contested cells, so contention resolves and routes stay short.
+      2. Multi-start: routing order has a large effect on the outcome (the same
+         placement can route with 1 or 6 failures depending on order), so we try
+         a few informed orders (identity, longest-first, shortest-first) then
+         deterministic random restarts, keeping the best (fewest failures, then
+         shortest), with early-exit once a conflict-free routing is found.
+
+    Returns (paths_world, lengths, failures), matching the original API:
+      paths_world[i]: list of (x, y) world points, or None if net i failed.
+      lengths[i]:     routed length + breakout, or inf if failed.
+      failures:       number of nets with no legal (conflict-free) route.
     """
     n = min(len(board.traces), len(test_points))
     if n == 0:
         return [], [], 0
 
-    # Compute straight-line distances for ordering heuristics
-    dists = []
+    grid = RoutingGrid(board)
+    rows, cols, res = grid.rows, grid.cols, grid.res
+    blocked = grid.obstacle_grid > 0           # hard obstacles + board edge
+
+    # Map start / test-point to (row, col) cells; clear them so they're routable.
+    cells = []
     for i in range(n):
         t = board.traces[i]
-        dx = test_points[i][0] - t.start_x
-        dy = test_points[i][1] - t.start_y
-        dists.append(np.hypot(dx, dy))
+        sc, sr = grid._world_to_grid(t.start_x, t.start_y)
+        ec, er = grid._world_to_grid(*test_points[i])
+        cells.append(((sr, sc), (er, ec)))
+        blocked[sr, sc] = False
+        blocked[er, ec] = False
 
-    # Generate candidate orders
-    orders: List[List[int]] = []
+    # Carve a short escape stub outward from each start. The connector keep-out
+    # raster over-blocks the cluster, so without this some starts are boxed in
+    # (every A* would return no-path). Each start escapes away from the cluster
+    # center along its row direction (lower row downward, upper row upward).
+    ccx = board.connector_x + board.connector_w / 2.0
+    ccy = board.connector_y + board.connector_h / 2.0
+    crow = grid._world_to_grid(ccx, ccy)[1]
+    for (sr, sc), _e in cells:
+        step_dir = 1 if sr > crow else -1
+        for j in range(5):
+            rr = sr + step_dir * j
+            if 0 <= rr < rows:
+                blocked[rr, sc] = False
+
+    endpoints = set()
+    for s, e in cells:
+        endpoints.add(s)
+        endpoints.add(e)
+
+    # Multi-start: informed orders first, then deterministic random restarts.
+    dist = [np.hypot(test_points[i][0] - board.traces[i].start_x,
+                     test_points[i][1] - board.traces[i].start_y) for i in range(n)]
     base = list(range(n))
-    orders.append(base)                                         # original
-    orders.append(base[::-1])                                   # reverse
-    orders.append(sorted(base, key=lambda i: dists[i]))         # shortest first
-    orders.append(sorted(base, key=lambda i: -dists[i]))        # longest first
-
-    # Route with best order so far
-    best_paths, best_lengths, best_failures = _route_in_order(board, test_points, orders[0])
-
-    for order in orders[1:]:
-        if best_failures == 0:
+    informed = [base,
+                sorted(base, key=lambda i: -dist[i]),   # longest first
+                sorted(base, key=lambda i: dist[i])]    # shortest first
+    rng = np.random.RandomState(0)
+    best_routes, best_key = None, None
+    for k in range(max(1, n_starts)):
+        order = informed[k] if k < len(informed) else list(rng.permutation(n))
+        routes = _negotiate(blocked, rows, cols, cells, endpoints, order,
+                            max_iters, present_penalty, history_inc)
+        fails, length_cells, _ = _score_routes(routes, cells, rows, cols)
+        key = (fails, length_cells)
+        if best_key is None or key < best_key:
+            best_key, best_routes = key, routes
+        if fails == 0:
             break
-        paths, lengths, failures = _route_in_order(board, test_points, order)
-        if failures < best_failures:
-            best_paths, best_lengths, best_failures = paths, lengths, failures
 
-    # Failed-first retry: move previously-failed traces to the front
-    if best_failures > 0:
-        failed = [i for i in range(n) if best_paths[i] is None]
-        succeeded = [i for i in range(n) if best_paths[i] is not None]
-        order = failed + succeeded
-        paths, lengths, failures = _route_in_order(board, test_points, order)
-        if failures < best_failures:
-            best_paths, best_lengths, best_failures = paths, lengths, failures
+    routes = best_routes
+    _, _, present = _score_routes(routes, cells, rows, cols)
 
-    # Random shuffles
-    rng = np.random.RandomState(42)
-    for _ in range(max_retries):
-        if best_failures == 0:
-            break
-        order = list(rng.permutation(n))
-        paths, lengths, failures = _route_in_order(board, test_points, order)
-        if failures < best_failures:
-            best_paths, best_lengths, best_failures = paths, lengths, failures
-            # Try failed-first on this new best
-            failed = [i for i in range(n) if best_paths[i] is None]
-            succeeded = [i for i in range(n) if best_paths[i] is not None]
-            order2 = failed + succeeded
-            paths2, lengths2, failures2 = _route_in_order(board, test_points, order2)
-            if failures2 < best_failures:
-                best_paths, best_lengths, best_failures = paths2, lengths2, failures2
+    paths: List[Optional[List[Tuple[float, float]]]] = []
+    lengths: List[float] = []
+    failures = 0
+    for i in range(n):
+        rt = routes[i]
+        s, e = cells[i]
+        illegal = rt is None or any(
+            present[cell] > 1 and cell not in (s, e) for cell in rt
+        )
+        if illegal:
+            paths.append(None)
+            lengths.append(float('inf'))
+            failures += 1
+        else:
+            world = [grid._grid_to_world(c, r) for (r, c) in rt]
+            plen = sum(np.hypot(rt[k + 1][0] - rt[k][0], rt[k + 1][1] - rt[k][1])
+                       for k in range(len(rt) - 1)) * res
+            paths.append(world)
+            lengths.append(plen + board.traces[i].breakout_length)
+    return paths, lengths, failures
 
-    return best_paths, best_lengths, best_failures
+
+def _resample_path(arr: np.ndarray, n: int = 200) -> np.ndarray:
+    """Uniformly resample a path to at most n points (keeps endpoints).
+    Uniform sampling, unlike strided slicing, never drops the final point."""
+    if len(arr) <= n:
+        return arr
+    idx = np.linspace(0, len(arr) - 1, n).round().astype(int)
+    return arr[idx]
 
 
 def validate_routing_constraints(
@@ -423,8 +514,8 @@ def validate_routing_constraints(
 
     for a in range(len(vp)):
         for b in range(a + 1, len(vp)):
-            sa = vp[a][::max(1, len(vp[a]) // 200)]
-            sb = vp[b][::max(1, len(vp[b]) // 200)]
+            sa = _resample_path(vp[a])
+            sb = _resample_path(vp[b])
             d = np.sqrt(((sa[:, None, :] - sb[None, :, :]) ** 2).sum(2))
             mcc = float(d.min())
             mee = mcc - TRACE_WIDTH

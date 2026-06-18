@@ -100,7 +100,10 @@ def main():
     print("Creating environments...")
     train_envs = [Damy(make_env("train", i, config.seed, args.num_traces))
                   for i in range(config.envs)]
-    eval_envs = [Damy(make_env("eval", i, config.seed, args.num_traces))
+    # Held-out eval boards: disjoint seed range from train's (which increments
+    # per episode up into the thousands), so eval measures generalization.
+    eval_seed = config.seed + 1_000_000
+    eval_envs = [Damy(make_env("eval", i, eval_seed, args.num_traces))
                  for i in range(config.envs)]
 
     acts = train_envs[0].action_space

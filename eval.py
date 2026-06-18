@@ -19,7 +19,8 @@ import numpy as np
 
 from envs.board import load_te_example, generate_candidate_grid, check_tp_spacing
 from envs.routing import route_all_traces, validate_routing_constraints
-from envs.visualize import plot_board
+# NOTE: envs.visualize (matplotlib) is imported lazily inside main() so the
+# numeric A* evaluation runs even when matplotlib is not installed.
 
 
 def evaluate_placement(board, placed_tps, use_freerouting=False):
@@ -117,11 +118,22 @@ def main():
     parser.add_argument("--num_traces", type=int, default=10)
     parser.add_argument("--freerouting", action="store_true",
                         help="Use FreeRouting instead of A*")
+    parser.add_argument("--no-plot", dest="plot", action="store_false",
+                        help="Skip PNG plots (runs without matplotlib)")
     args = parser.parse_args()
 
     router_name = "FreeRouting" if args.freerouting else "A*"
     outdir = pathlib.Path("eval_results")
     outdir.mkdir(exist_ok=True)
+
+    # Plotting is optional: import matplotlib-backed visualize only if requested
+    # and available, so the numeric A* evaluation works without matplotlib.
+    plot_board = None
+    if args.plot:
+        try:
+            from envs.visualize import plot_board
+        except ImportError:
+            print("(matplotlib not installed — skipping plots, metrics only)")
 
     board = load_te_example(num_traces=args.num_traces)
     candidates, real_count = generate_candidate_grid(board, resolution=6.5)
@@ -137,11 +149,12 @@ def main():
             print(f"  Ep {i + 1}: failures={r['failures']}, "
                   f"length={r['total_length']:.0f}mm, "
                   f"spread={r['spread']:.2f}, t2t={t2t}mm")
-            plot_board(board, test_points=r["placed"], paths=r["paths"],
-                       candidates=candidates,
-                       title=f"{name} #{i + 1}: {r['failures']} fail, "
-                             f"{r['total_length']:.0f}mm",
-                       filename=str(outdir / f"{name.lower()}_{i + 1}.png"))
+            if plot_board is not None:
+                plot_board(board, test_points=r["placed"], paths=r["paths"],
+                           candidates=candidates,
+                           title=f"{name} #{i + 1}: {r['failures']} fail, "
+                                 f"{r['total_length']:.0f}mm",
+                           filename=str(outdir / f"{name.lower()}_{i + 1}.png"))
 
     print(f"\n--- Random Baseline ({router_name}) ---")
     random_results = run_random_baseline(
@@ -166,14 +179,17 @@ def main():
         fails = [r["failures"] for r in results]
         lengths = [r["total_length"] for r in results]
         spreads = [r["spread"] for r in results]
+        # Fully feasible = every trace routed AND no clearance violations.
         valid = sum(1 for r in results
-                    if r.get("validation", {}).get("all_valid", False))
+                    if r["failures"] == 0
+                    and r.get("validation", {}).get("all_valid", False))
         print(f"  {name:>10s}: failures={np.mean(fails):.1f}+/-{np.std(fails):.1f}, "
               f"length={np.mean(lengths):.0f}mm, "
               f"spread={np.mean(spreads):.2f}, "
               f"valid={valid}/{len(results)}")
 
-    print(f"\nPlots saved to {outdir}/")
+    if plot_board is not None:
+        print(f"\nPlots saved to {outdir}/")
 
 
 if __name__ == "__main__":

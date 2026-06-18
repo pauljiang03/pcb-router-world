@@ -9,7 +9,8 @@ class PCBDreamerEnv:
     metadata = {}
 
     def __init__(self, num_traces=8, seed=0):
-        self._inner = TPPlacementEnv(num_traces=num_traces, seed=seed)
+        self._inner = TPPlacementEnv(num_traces=num_traces, seed=seed,
+                                     use_freerouting=False)  # A* for training
         self._seed = seed
         self.reward_range = [-np.inf, np.inf]
 

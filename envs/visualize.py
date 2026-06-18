@@ -3,10 +3,74 @@
 """
 
 import numpy as np
-import matplotlib.pyplot as plt
-import matplotlib.patches as patches
 from typing import List, Tuple, Optional
 from envs.board import BoardSpec, TP_TO_TP_MIN
+
+# matplotlib is imported lazily inside plot_board() so this module — and the PIL
+# renderer below — work in environments without matplotlib installed.
+
+
+def render_board_png(board: BoardSpec, test_points=None, paths=None,
+                     filename: str = "board.png", scale: int = 6,
+                     title: Optional[str] = None) -> str:
+    """Render board, obstacles, starts, test points and routed traces to a PNG
+    using PIL only (no matplotlib). Returns the filename."""
+    from PIL import Image, ImageDraw
+    import colorsys
+
+    pad = 22
+    head = 26 if title else 0
+    W = int(board.width * scale)
+    H = int(board.height * scale)
+    img = Image.new("RGB", (W + 2 * pad, H + 2 * pad + head), "white")
+    d = ImageDraw.Draw(img)
+
+    def wx(x):
+        return pad + (x - board.x_min) * scale
+
+    def wy(y):  # flip vertical so +y is up
+        return pad + head + (board.height - (y - board.y_min)) * scale
+
+    # board outline
+    d.rectangle([wx(board.x_min), wy(board.y_max), wx(board.x_max), wy(board.y_min)],
+                outline="black", width=2)
+    # rectangular obstacles
+    for o in board.rect_obstacles:
+        xn, yn, xx, yx = o.bounds
+        d.rectangle([wx(xn), wy(yx), wx(xx), wy(yn)], fill=(255, 175, 175),
+                    outline=(190, 0, 0))
+    # circular obstacles
+    for o in board.circ_obstacles:
+        d.ellipse([wx(o.cx - o.radius), wy(o.cy + o.radius),
+                   wx(o.cx + o.radius), wy(o.cy - o.radius)],
+                  fill=(255, 150, 150), outline=(150, 0, 0))
+    # connector outline
+    if board.connector_w > 0:
+        d.rectangle([wx(board.connector_x), wy(board.connector_y + board.connector_h),
+                     wx(board.connector_x + board.connector_w), wy(board.connector_y)],
+                    outline=(150, 0, 190), width=2)
+
+    n = max(len(board.traces), 1)
+    colors = [tuple(int(255 * c) for c in colorsys.hsv_to_rgb(i / n, 0.85, 0.9))
+              for i in range(n)]
+    # routed traces
+    if paths:
+        for i, p in enumerate(paths):
+            if p:
+                d.line([(wx(x), wy(y)) for x, y in p], fill=colors[i % n], width=2)
+    # starts (black squares)
+    for t in board.traces:
+        x, y = wx(t.start_x), wy(t.start_y)
+        d.rectangle([x - 3, y - 3, x + 3, y + 3], fill="black")
+    # test points (colored, black edge)
+    if test_points:
+        for i, (tx, ty) in enumerate(test_points):
+            x, y = wx(tx), wy(ty)
+            d.ellipse([x - 5, y - 5, x + 5, y + 5], fill=colors[i % n], outline="black")
+    if title:
+        d.text((pad, 7), title, fill="black")
+    img.save(filename)
+    return filename
 
 
 def plot_board(
@@ -22,6 +86,8 @@ def plot_board(
     """
     Plot the board with obstacles, starting points, test points, and traces.
     """
+    import matplotlib.pyplot as plt
+    import matplotlib.patches as patches
     fig, ax = plt.subplots(1, 1, figsize=figsize)
 
     # Board outline

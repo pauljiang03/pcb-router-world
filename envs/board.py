@@ -108,6 +108,10 @@ TRACE_MIN_CENTER_TO_CENTER = TRACE_TO_TRACE_MIN + TRACE_WIDTH  # 1.3286mm
 # Fixed action-space size so it stays constant across board geometries.
 MAX_CANDIDATES = 200
 
+# Central-connector board sizing.
+BOARD_SIZE = 160.0          # square board edge, mm (enlarge if routing fails)
+N_PER_ROW = 10              # starts per row; 2 rows -> 20 traces
+
 
 def _respaced_x(original_x: List[float], min_spacing: float) -> List[float]:
     """
@@ -125,133 +129,90 @@ def _respaced_x(original_x: List[float], min_spacing: float) -> List[float]:
     return new_x
 
 
-def load_te_example(num_traces: int = 10, seed: int = None) -> BoardSpec:
+def load_te_example(num_traces: int = 20, seed: int = None,
+                    board_size: float = BOARD_SIZE) -> BoardSpec:
     """
-    Load the TE AutoLayout Example01 board.
+    Central-connector board for SI test-point placement.
 
-    Board geometry and obstacles from TE Excel/PowerPoint data.
-    Starting points: 5 per row (top + bottom), centered within the
-    non-routing zone at TRACE_MIN_CENTER_TO_CENTER spacing.
+    A connector cluster (non-routing zone, UPTHs, tab pads, and 2 x N_PER_ROW
+    start points in two rows) is placed at the CENTER of a square board. The two
+    rows straddle the non-routing zone: the lower row escapes downward and the
+    upper row escapes upward, so traces fan into both halves of the board rather
+    than all routing one direction. This keeps routes short and avoids the
+    single-channel congestion of an edge-mounted connector.
 
     Args:
-        num_traces: how many traces to include (1–12). Top row first,
-                    then bottom row. 6 per row at minimum spacing.
-        seed:       if provided, the connector cluster (NRZ, obstacles,
-                    starting traces) is shifted to a random position on
-                    the board, giving each seed a different layout while
-                    preserving internal geometry.
+        num_traces: traces to include (1..2*N_PER_ROW = 20). Lower row first,
+                    then upper row.
+        seed:       if given, the cluster is jittered around the board center
+                    (staying central and routable) so each seed differs.
+        board_size: square board edge length in mm.
     """
-    board = BoardSpec(
-        origin_x=0.0,
-        origin_y=98.2,
-        width=135.0,
-        height=90.0,
-    )
+    board = BoardSpec(origin_x=0.0, origin_y=0.0,
+                      width=board_size, height=board_size)
 
-    # ------------------------------------------------------------------
-    # Compute random offset for the connector cluster
-    # ------------------------------------------------------------------
-    # Original cluster reference positions (absolute coords)
-    # Connector outline: (55.0, 104.5) with size (24.0, 12.0)
-    # Cluster center:
-    _orig_conn_x = 55.0
-    _orig_conn_y = 104.5
-    _orig_conn_w = 24.0
-    _orig_conn_h = 12.0
+    cx0 = board.x_min + board.width / 2.0
+    cy0 = board.y_min + board.height / 2.0
 
-    # Margin from board edge to keep the cluster fully inside
-    _edge_margin = 10.0  # mm
+    min_sp = TRACE_MIN_CENTER_TO_CENTER
+    row_span = (N_PER_ROW - 1) * min_sp          # x-extent spanned by one row
 
+    nrz_w = row_span + 4.0                        # non-routing zone spans the row
+    nrz_h = 6.64
+    row_gap = nrz_h + 0.2                         # vertical distance between rows
+
+    # Jitter the cluster around the center for different seeds (kept central).
     if seed is not None:
         rng = np.random.RandomState(seed)
-
-        # Valid range for the connector's bottom-left corner
-        x_lo = board.x_min + _edge_margin
-        x_hi = board.x_max - _orig_conn_w - _edge_margin
-        y_lo = board.y_min + _edge_margin
-        y_hi = board.y_max - _orig_conn_h - _edge_margin
-
-        new_conn_x = rng.uniform(x_lo, x_hi)
-        new_conn_y = rng.uniform(y_lo, y_hi)
-
-        dx = new_conn_x - _orig_conn_x
-        dy = new_conn_y - _orig_conn_y
+        jitter = min(20.0, board.width / 2 - (TP_TO_EDGE_MIN + max(nrz_w, row_gap)))
+        ccx = cx0 + rng.uniform(-jitter, jitter)
+        ccy = cy0 + rng.uniform(-jitter, jitter)
     else:
-        dx = 0.0
-        dy = 0.0
+        ccx, ccy = cx0, cy0
 
-    # ------------------------------------------------------------------
-    # Obstacles (exact TE data, shifted by dx/dy)
-    # ------------------------------------------------------------------
-
-    # Non-routing zone: bottom-left (58.294, 108.044), 17.8 × 6.64 mm
-    nrz_x, nrz_y, nrz_w, nrz_h = 58.294 + dx, 108.044 + dy, 17.8, 6.64
+    # Non-routing zone centered on the cluster.
     board.rect_obstacles.append(Obstacle(
-        cx=nrz_x + nrz_w / 2,
-        cy=nrz_y + nrz_h / 2,
-        width=nrz_w, height=nrz_h,
-        clearance=TRACE_TO_EDGE_MIN,
-        name="non_routing_zone",
+        cx=ccx, cy=ccy, width=nrz_w, height=nrz_h,
+        clearance=TRACE_TO_EDGE_MIN, name="non_routing_zone",
     ))
 
-    # UPTHs
+    # UPTHs inside the NRZ region.
     board.circ_obstacles.append(CircularObstacle(
-        cx=58.194 + dx, cy=105.894 + dy, radius=1.9 / 2,
-        clearance=TRACE_TO_UPTH_MIN, name="UPTH_1",
-    ))
+        cx=ccx - nrz_w * 0.25, cy=ccy, radius=1.9 / 2,
+        clearance=TRACE_TO_UPTH_MIN, name="UPTH_1"))
     board.circ_obstacles.append(CircularObstacle(
-        cx=76.194 + dx, cy=105.894 + dy, radius=1.9 / 2,
-        clearance=TRACE_TO_UPTH_MIN, name="UPTH_2",
-    ))
+        cx=ccx + nrz_w * 0.25, cy=ccy, radius=1.9 / 2,
+        clearance=TRACE_TO_UPTH_MIN, name="UPTH_2"))
 
-    # Tab pads: bottom-left corners given, convert to center
-    board.rect_obstacles.append(Obstacle(
-        cx=56.151 + dx + 1.526 / 2, cy=113.346 + dy + 1.216 / 2,
-        width=1.526, height=1.216,
-        clearance=TRACE_TO_TABPAD_MIN, name="tab_pad_1",
-    ))
-    board.rect_obstacles.append(Obstacle(
-        cx=76.711 + dx + 1.526 / 2, cy=113.346 + dy + 1.216 / 2,
-        width=1.526, height=1.216,
-        clearance=TRACE_TO_TABPAD_MIN, name="tab_pad_2",
-    ))
+    # Tab pads at the two ends of the cluster.
+    for sgn, nm in ((-1, "tab_pad_1"), (1, "tab_pad_2")):
+        board.rect_obstacles.append(Obstacle(
+            cx=ccx + sgn * (row_span / 2 + 1.2), cy=ccy,
+            width=1.526, height=1.216,
+            clearance=TRACE_TO_TABPAD_MIN, name=nm))
 
-    # Connector outline (encompasses NRZ + tab pads + UPTH region)
-    board.connector_x = _orig_conn_x + dx
-    board.connector_y = _orig_conn_y + dy
-    board.connector_w = _orig_conn_w
-    board.connector_h = _orig_conn_h
+    # Connector outline encompassing the cluster.
+    conn_w = row_span + 6.0
+    conn_h = row_gap + 6.0
+    board.connector_x = ccx - conn_w / 2
+    board.connector_y = ccy - conn_h / 2
+    board.connector_w = conn_w
+    board.connector_h = conn_h
 
-    # ------------------------------------------------------------------
-    # Starting points — 6 per row × 2 rows = 12 traces, centered on NRZ
-    # Spacing = TRACE_MIN_CENTER_TO_CENTER (1.3286mm), just sufficient
-    # for trace-to-trace clearance.
-    # ------------------------------------------------------------------
-    nrz_cx = nrz_x + nrz_w / 2
-    n_per_row = 6
-    min_sp = TRACE_MIN_CENTER_TO_CENTER  # 1.3286mm
-
-    # 6 positions centered on the NRZ x-center at minimum spacing
-    start_xs = [nrz_cx + (i - (n_per_row - 1) / 2) * min_sp
-                for i in range(n_per_row)]
-
-    top_y = 107.9436 + dy   # just below NRZ bottom
-    bot_y = 114.7446 + dy   # just above NRZ top
+    # Start points: two rows straddling the NRZ, centered on the cluster.
+    start_xs = [ccx + (i - (N_PER_ROW - 1) / 2.0) * min_sp
+                for i in range(N_PER_ROW)]
+    lower_y = ccy - nrz_h / 2 - 0.1               # escapes downward
+    upper_y = ccy + nrz_h / 2 + 0.1               # escapes upward
     breakout = 0.8626
 
     all_traces = []
-    # Top row: traces 0–5
-    for i, x in enumerate(start_xs):
-        all_traces.append(TraceSpec(
-            start_x=x, start_y=top_y,
-            breakout_length=breakout, index=i,
-        ))
-    # Bottom row: traces 6–11
-    for i, x in enumerate(start_xs):
-        all_traces.append(TraceSpec(
-            start_x=x, start_y=bot_y,
-            breakout_length=breakout, index=n_per_row + i,
-        ))
+    for i, x in enumerate(start_xs):              # lower row: 0 .. N-1
+        all_traces.append(TraceSpec(start_x=x, start_y=lower_y,
+                                    breakout_length=breakout, index=i))
+    for i, x in enumerate(start_xs):              # upper row: N .. 2N-1
+        all_traces.append(TraceSpec(start_x=x, start_y=upper_y,
+                                    breakout_length=breakout, index=N_PER_ROW + i))
 
     board.traces = all_traces[:num_traces]
     return board
@@ -283,9 +244,11 @@ def generate_candidate_grid(board: BoardSpec, resolution: float = 6.5,
             if _is_valid_tp_position(board, x, y):
                 candidates.append((x, y))
 
-    # Truncate if too many
+    # Subsample uniformly if too many (preserve spatial coverage of the whole
+    # board instead of head-truncating one side).
     if len(candidates) > max_candidates:
-        candidates = candidates[:max_candidates]
+        idx = np.linspace(0, len(candidates) - 1, max_candidates).astype(int)
+        candidates = [candidates[i] for i in idx]
 
     real_count = len(candidates)
 

@@ -112,6 +112,37 @@ def run_spread_baseline(board, candidates, num_traces, num_episodes=5,
     return results
 
 
+def run_planar_baseline(board, candidates, num_traces, num_episodes=5,
+                        use_freerouting=False):
+    """Non-crossing by construction: pick spread test points, then match
+    pins<->TPs in angular order around the connector (a planar radial fan)."""
+    ccx = board.connector_x + board.connector_w / 2
+    ccy = board.connector_y + board.connector_h / 2
+    chosen = []
+    for idx in np.argsort(-np.hypot(candidates[:, 0] - ccx, candidates[:, 1] - ccy)):
+        if len(chosen) >= num_traces:
+            break
+        if check_tp_spacing(chosen, *candidates[idx]):
+            chosen.append(tuple(candidates[idx]))
+    tps = sorted(chosen, key=lambda p: np.arctan2(p[1] - ccy, p[0] - ccx))
+    pins = sorted(range(num_traces),
+                  key=lambda i: np.arctan2(board.traces[i].start_y - ccy,
+                                           board.traces[i].start_x - ccx))
+    placed = [None] * num_traces
+    for k, i in enumerate(pins):
+        if k < len(tps):
+            placed[i] = tps[k]
+    for i in range(num_traces):
+        if placed[i] is None:
+            for cx, cy in candidates:
+                if check_tp_spacing([q for q in placed if q], cx, cy):
+                    placed[i] = (cx, cy)
+                    break
+    # Deterministic; replicate across episodes for a comparable table.
+    return [evaluate_placement(board, placed, use_freerouting)
+            for _ in range(num_episodes)]
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--episodes", type=int, default=5)
@@ -147,8 +178,10 @@ def main():
             t2t = (f"{v['trace_to_trace_min']:.2f}"
                    if v['trace_to_trace_min'] < float('inf') else "n/a")
             print(f"  Ep {i + 1}: failures={r['failures']}, "
+                  f"crossings={v.get('crossings', 0)}, "
                   f"length={r['total_length']:.0f}mm, "
-                  f"spread={r['spread']:.2f}, t2t={t2t}mm")
+                  f"spread={r['spread']:.2f}, t2t={t2t}mm, "
+                  f"pad_clr={v.get('tp_to_trace_min', float('inf')):.1f}mm")
             if plot_board is not None:
                 plot_board(board, test_points=r["placed"], paths=r["paths"],
                            candidates=candidates,
@@ -171,19 +204,27 @@ def main():
         board, candidates, args.num_traces, args.episodes, args.freerouting)
     print_results("Spread", spread_results)
 
+    print(f"\n--- Planar Baseline ({router_name}) ---  (non-crossing by construction)")
+    planar_results = run_planar_baseline(
+        board, candidates, args.num_traces, args.episodes, args.freerouting)
+    print_results("Planar", planar_results)
+
     # Summary
     print(f"\n--- Summary ({router_name}) ---")
     for name, results in [("Random", random_results),
                           ("Greedy", greedy_results),
-                          ("Spread", spread_results)]:
+                          ("Spread", spread_results),
+                          ("Planar", planar_results)]:
         fails = [r["failures"] for r in results]
         lengths = [r["total_length"] for r in results]
         spreads = [r["spread"] for r in results]
-        # Fully feasible = every trace routed AND no clearance violations.
+        crossings = [r.get("validation", {}).get("crossings", 0) for r in results]
+        # Fully feasible = every trace routed AND no clearance violations / crossings.
         valid = sum(1 for r in results
                     if r["failures"] == 0
                     and r.get("validation", {}).get("all_valid", False))
         print(f"  {name:>10s}: failures={np.mean(fails):.1f}+/-{np.std(fails):.1f}, "
+              f"crossings={np.mean(crossings):.1f}, "
               f"length={np.mean(lengths):.0f}mm, "
               f"spread={np.mean(spreads):.2f}, "
               f"valid={valid}/{len(results)}")

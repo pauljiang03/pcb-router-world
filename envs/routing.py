@@ -524,6 +524,95 @@ def route_all_traces(
     return paths, lengths, failures
 
 
+def equalize_lengths(board, paths_world, passes=24, tol=1.0):
+    """Stage 3 — length matching. Meander shorter traces to the longest trace by
+    inserting serpentine 'bumps' (a 1-cell perpendicular detour out and back) in
+    free cells along each path. Crossing-safe by construction: bumps only ever use
+    cells that no obstacle or trace (or earlier bump) occupies, so the result stays
+    cell-disjoint and therefore planar.
+
+    Returns (new_paths_world, new_lengths, target_len_mm, n_matched), where
+    n_matched is how many routed traces reached the target length (the rest are
+    space-limited — that residual is what the soft length-spread reward steers the
+    agent to keep small)."""
+    grid = RoutingGrid(board)
+    rows, cols, res = grid.rows, grid.cols, grid.res
+    blocked = grid.obstacle_grid > 0
+
+    # World paths -> dedup'd (row, col) cell paths.
+    cell_paths = []
+    for p in paths_world:
+        if p is None:
+            cell_paths.append(None)
+            continue
+        cp = []
+        for (x, y) in p:
+            c, r = grid._world_to_grid(x, y)
+            if not cp or cp[-1] != (r, c):
+                cp.append((r, c))
+        cell_paths.append(cp)
+
+    occ = set()
+    for cp in cell_paths:
+        if cp:
+            occ.update(cp)
+
+    def plen(p):
+        return sum(np.hypot(p[k + 1][0] - p[k][0], p[k + 1][1] - p[k][1])
+                   for k in range(len(p) - 1))
+
+    routed = [p for p in cell_paths if p]
+    if not routed:
+        return paths_world, [float('inf')] * len(paths_world), 0.0, 0
+    target = max(plen(p) for p in routed)
+
+    for i in range(len(cell_paths)):
+        p = cell_paths[i]
+        if not p:
+            continue
+        need = target - plen(p)                 # cells of length still to add
+        if need <= tol:
+            continue
+        added_total = 0.0
+        for _ in range(passes):
+            if added_total >= need - tol:
+                break
+            new = [p[0]]
+            progressed = False
+            for k in range(len(p) - 1):
+                A, N = p[k], p[k + 1]
+                dr, dc = N[0] - A[0], N[1] - A[1]
+                # Insert a bump only while we still need length (stop at target —
+                # each bump adds exactly 2 cells, so we never overshoot by >1 bump).
+                if added_total < need - tol and (dr == 0) != (dc == 0):
+                    perps = [(1, 0), (-1, 0)] if dr == 0 else [(0, 1), (0, -1)]
+                    for pr, pc in perps:
+                        B = (A[0] + pr, A[1] + pc)
+                        C = (N[0] + pr, N[1] + pc)
+                        if (0 <= B[0] < rows and 0 <= B[1] < cols and
+                                0 <= C[0] < rows and 0 <= C[1] < cols and
+                                not blocked[B] and not blocked[C] and
+                                B not in occ and C not in occ and B != new[-1]):
+                            new += [B, C]
+                            occ.add(B)
+                            occ.add(C)
+                            added_total += 2.0
+                            progressed = True
+                            break
+                new.append(N)
+            p = new
+            if not progressed:
+                break
+        cell_paths[i] = p
+
+    new_paths = [[grid._grid_to_world(c, r) for (r, c) in p] if p else None
+                 for p in cell_paths]
+    new_lengths = [plen(p) * res + board.traces[i].breakout_length if p else float('inf')
+                   for i, p in enumerate(cell_paths)]
+    n_matched = sum(1 for p in cell_paths if p and plen(p) >= target - tol)
+    return new_paths, new_lengths, target * res, n_matched
+
+
 def _resample_path(arr: np.ndarray, n: int = 200) -> np.ndarray:
     """Uniformly resample a path to at most n points (keeps endpoints).
     Uniform sampling, unlike strided slicing, never drops the final point."""

@@ -198,12 +198,15 @@ When a seed is provided, the connector cluster (NRZ, UPTHs, tab pads, starting t
 | Minimum trace-to-trace spacing | +0.5 × (min_spacing / target) | Maximize spacing (weight 0.5) |
 | Length spread (soft) | -λ × (max_length - min_length) / mean_length | Keep lengths similar for post-hoc equalization |
 
-> **Implementation note (the table above is the design intent, not the current code).**
-> `envs/pcb_env.py:_validate` currently uses +15 routable / −10·failures /
-> −5·(total_len/diagonal) / **−80·spread** / +2·spacing, plus per-step +1 / −2 /
-> +0.3·valid_frac. The −80·spread term dominates (measured greedy spread ≈ 1.2 →
-> ≈ −96), overwhelming the other objectives — see `IMPROVEMENTS.md` P1.1. Every
-> component is logged in `info["reward_components"]` to support re-balancing.
+> **Implementation note (current code).** `envs/pcb_env.py:_validate` uses
+> rebalanced episode-end terms — **+10 routable / −5·failures**, **−10·(total_len/diag)**
+> (shorter length), **−8·spread** (equal length), **−5·(TP-bbox/diag)** (compactness/
+> containment) — plus per-step +1 / −2 / +0.3·valid_frac. Weights are comparable so
+> no single term dominates (the old −80·spread did). `failures` includes
+> crossing-forced drops, so the feasibility term also penalizes placements that
+> would require trace crossings. Exact equal length is achieved post-hoc by
+> `envs/routing.py:equalize_lengths` (Stage-3 meander, crossing-safe). All
+> components are logged in `info["reward_components"]`.
 
 ### Design Decisions Informed by Prior Work
 

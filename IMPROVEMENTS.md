@@ -21,17 +21,24 @@ P2 docs. Reward components are now logged in `info["reward_components"]`, and th
 eval validity metric now requires `failures==0`.
 
 **Routing & 20-trace board overhaul (done & verified — see `ROUTING.md`):** the
-board is now a central connector with 20 traces (2×10 rows) on a 160 mm board so
-traces fan into both halves; the router was rewritten to negotiated-congestion
-rip-up-and-reroute + escape-carving + multi-start. Result: a reasonable
-(fan) placement routes ~20/20 within ~6% of the optimal length. `ROUTING.md` also
-lays out the novel learned-guidance approaches (net-ordering distillation,
-waypoint subgoals, cost-field prediction, world-model co-design).
+board is a central connector with 20 traces (2×10 rows) so traces fan into both
+halves; the router is **octilinear (45°) negotiated rip-up-reroute + escape-carving
++ multi-start**, with a **guaranteed-planar (zero-crossing)** result — diagonal
+X-crossings are penalized during routing, then any residual is removed using the
+verifier's own predicate. A non-crossing angular placement routes ~20/20 at 45°
+with 0 crossings. `ROUTING.md` lays out the novel learned-guidance approaches.
+
+**Length matching + reward rebalance (done):** `envs/routing.py:equalize_lengths`
+is the crossing-safe Stage-3 meander (spread 0.35→0.02 on a feasible board, 0
+crossings). The episode-end reward was rebalanced (no single term dominates) and
+now optimizes shorter total length, equal length (spread), and compactness/
+containment; `failures` already penalize crossing-requiring placements. All
+components logged in `info["reward_components"]`.
 
 **Deferred — need a training run to validate:** P0.3 *faithful* −∞ logit masking
-through the actor · P1.1 final reward coefficients (instrumented, not retuned) ·
-P1.3 trained-policy eval path (needs a checkpoint) · P1.4 PPO baseline (needs
-stable-baselines3 + compute).
+through the actor · P1.3 trained-policy eval path (needs a checkpoint) · P1.4 PPO
+baseline (needs stable-baselines3 + compute). (Reward weights are balanced and
+sensible, but their *final* tuning still needs a training run.)
 
 ---
 

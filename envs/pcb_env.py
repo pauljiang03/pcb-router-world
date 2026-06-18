@@ -222,35 +222,36 @@ class TPPlacementEnv(gym.Env):
 
         reward = 0.0
         comp = {}
+        diag = np.hypot(self.board.width, self.board.height)
 
-        # Routability
-        comp["routable"] = 15.0 if failures == 0 else -10.0 * failures
+        # Feasibility: full routing means every trace connected, no crossing-forced
+        # drops (the router drops a net rather than cross — so this also penalizes
+        # placements that require crossings).
+        comp["routable"] = 10.0 if failures == 0 else -5.0 * failures
         reward += comp["routable"]
 
-        # Trace lengths
         finite = [l for l in lengths if l < float('inf')]
         if finite:
-            diag = np.hypot(self.board.width, self.board.height)
-            # Minimize total length
-            comp["length"] = -5.0 * sum(finite) / (len(finite) * diag)
+            # (1) Minimize total trace length (normalized per routed trace).
+            comp["length"] = -10.0 * sum(finite) / (len(finite) * diag)
             reward += comp["length"]
-            # Length matching
+            # (2) Equal length: penalize length spread so post-hoc meandering
+            #     (envs.routing.equalize_lengths) can equalize within available space.
             if len(finite) > 1:
                 spread = (max(finite) - min(finite)) / max(np.mean(finite), 1e-6)
-                comp["spread"] = -80.0 * spread
+                comp["spread"] = -8.0 * spread
                 reward += comp["spread"]
 
-        # TP spacing quality
+        # (3) Compactness / containment: reward a small test-point footprint.
         if len(self.placed_tps) > 1:
-            min_sp = min(
-                np.hypot(a[0] - b[0], a[1] - b[1])
-                for i, a in enumerate(self.placed_tps)
-                for b in self.placed_tps[i + 1:]
-            )
-            comp["spacing"] = 2.0 * min(min_sp / TP_TO_TP_MIN, 2.0)
-            reward += comp["spacing"]
+            xs = [p[0] for p in self.placed_tps]
+            ys = [p[1] for p in self.placed_tps]
+            bbox_diag = np.hypot(max(xs) - min(xs), max(ys) - min(ys))
+            comp["compactness"] = -5.0 * bbox_diag / diag
+            reward += comp["compactness"]
 
-        # Per-component breakdown for reward-balance diagnostics (see IMPROVEMENTS P1.1)
+        # Per-component breakdown for reward-balance diagnostics (logged in info).
+        # Weights kept comparable so no single term dominates (the old -80*spread did).
         self._reward_components = comp
         return reward
 

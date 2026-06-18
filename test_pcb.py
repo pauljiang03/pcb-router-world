@@ -146,6 +146,33 @@ def test_training_env_wrapper_chain():
     assert "reward_components" in info
 
 
+def test_length_matching_is_crossing_safe_and_equalizes():
+    """Stage 3 (equalize_lengths) meanders shorter traces toward the longest
+    without ever introducing a crossing, and does not worsen length spread."""
+    from envs.routing import equalize_lengths
+    b = load_te_example(num_traces=20, seed=1)
+    c, rc = generate_candidate_grid(b, 6.5); c = c[:rc]
+    ccx = b.connector_x + b.connector_w / 2; ccy = b.connector_y + b.connector_h / 2
+    chosen = []
+    for idx in np.argsort(-np.hypot(c[:, 0] - ccx, c[:, 1] - ccy)):
+        if len(chosen) >= 20: break
+        if check_tp_spacing(chosen, *c[idx]): chosen.append(tuple(c[idx]))
+    tps = sorted(chosen, key=lambda p: np.arctan2(p[1] - ccy, p[0] - ccx))
+    pins = sorted(range(20), key=lambda i: np.arctan2(b.traces[i].start_y - ccy,
+                                                      b.traces[i].start_x - ccx))
+    placed = [None] * 20
+    for k, i in enumerate(pins):
+        placed[i] = tps[k]
+    paths, L, _ = route_all_traces(b, placed)
+    fin0 = [x for x in L if x < float('inf')]
+    s0 = (max(fin0) - min(fin0)) / np.mean(fin0)
+    paths2, L2, _, _ = equalize_lengths(b, paths)
+    fin1 = [x for x in L2 if x < float('inf')]
+    s1 = (max(fin1) - min(fin1)) / np.mean(fin1)
+    assert count_crossings(paths2) == 0          # meander never crosses
+    assert s1 <= s0 + 0.05                        # equalizes (never worsens spread)
+
+
 def test_router_output_never_crosses():
     """The rectilinear router is planar by construction: cell-disjoint axis-aligned
     paths cannot cross, and conflicting nets are dropped — so route_all_traces

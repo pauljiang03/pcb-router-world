@@ -50,6 +50,8 @@ class TPPlacementEnv(gym.Env):
         use_freerouting: bool = False,
         render_mode: Optional[str] = None,
         seed: int = 0,
+        route_n_starts: int = 3,
+        route_max_iters: int = 25,
     ):
         super().__init__()
         self.render_mode = render_mode
@@ -58,6 +60,10 @@ class TPPlacementEnv(gym.Env):
         self._candidate_resolution = candidate_resolution
         self._board_seed = seed
         self._board_given = board is not None
+        # Per-episode routing budget (kept low for training throughput; eval.py
+        # calls route_all_traces directly with its larger defaults for quality).
+        self._route_n_starts = route_n_starts
+        self._route_max_iters = route_max_iters
 
         if board is None:
             board = load_te_example(num_traces=num_traces, seed=seed)
@@ -210,11 +216,13 @@ class TPPlacementEnv(gym.Env):
                 )
                 self.use_freerouting = False
                 paths, lengths, failures = route_astar(
-                    self.board, self.placed_tps
+                    self.board, self.placed_tps,
+                    n_starts=self._route_n_starts, max_iters=self._route_max_iters,
                 )
         else:
             paths, lengths, failures = route_astar(
-                self.board, self.placed_tps
+                self.board, self.placed_tps,
+                n_starts=self._route_n_starts, max_iters=self._route_max_iters,
             )
 
         self.routed_paths = paths

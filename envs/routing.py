@@ -395,27 +395,13 @@ def _remove_crossings(routes, cells, rows, cols, grid):
     while True:
         world = [[grid._grid_to_world(c, r) for (r, c) in rt] if rt else None
                  for rt in routes]
-        segs = []
-        for idx, p in enumerate(world):
-            if p:
-                for k in range(len(p) - 1):
-                    segs.append((idx, p[k], p[k + 1]))
-        deg = {}
-        for a in range(len(segs)):
-            ia, A, B = segs[a]
-            for b in range(a + 1, len(segs)):
-                ib, C, D = segs[b]
-                if ia == ib:
-                    continue
-                d1 = _ccw(C[0], C[1], D[0], D[1], A[0], A[1])
-                d2 = _ccw(C[0], C[1], D[0], D[1], B[0], B[1])
-                d3 = _ccw(A[0], A[1], B[0], B[1], C[0], C[1])
-                d4 = _ccw(A[0], A[1], B[0], B[1], D[0], D[1])
-                if ((d1 > 0) != (d2 > 0)) and ((d3 > 0) != (d4 > 0)):
-                    deg[ia] = deg.get(ia, 0) + 1
-                    deg[ib] = deg.get(ib, 0) + 1
-        if not deg:
+        pairs = _crossing_pairs(world)
+        if not pairs:
             break
+        deg = {}
+        for i, j in pairs:
+            deg[i] = deg.get(i, 0) + 1
+            deg[j] = deg.get(j, 0) + 1
         routes[max(deg, key=lambda k: deg[k])] = None
     return routes
 
@@ -658,17 +644,16 @@ def _ccw(ax, ay, bx, by, cx, cy):
     return (cy - ay) * (bx - ax) - (by - ay) * (cx - ax)
 
 
-def count_crossings(paths) -> int:
-    """Count pairs of traces whose routed polylines properly cross. Two traces
-    crossing is illegal on a single layer; a valid routing has zero crossings.
-    (The rectilinear router guarantees zero among conflict-free nets, so this is
-    a defensive check used in validation and tests.)"""
+def _crossing_pairs(paths):
+    """Set of (i, j) net-index pairs whose routed polylines properly cross. Exact
+    O(#segments^2) check — the shared, safety-critical primitive for the planar
+    guarantee (used by count_crossings and the router's crossing-removal pass)."""
     segs = []
     for idx, p in enumerate(paths):
         if p:
             for k in range(len(p) - 1):
                 segs.append((idx, p[k], p[k + 1]))
-    crossing_pairs = set()
+    pairs = set()
     for a in range(len(segs)):
         ia, A, B = segs[a]
         for b in range(a + 1, len(segs)):
@@ -680,8 +665,14 @@ def count_crossings(paths) -> int:
             d3 = _ccw(A[0], A[1], B[0], B[1], C[0], C[1])
             d4 = _ccw(A[0], A[1], B[0], B[1], D[0], D[1])
             if ((d1 > 0) != (d2 > 0)) and ((d3 > 0) != (d4 > 0)):
-                crossing_pairs.add((min(ia, ib), max(ia, ib)))
-    return len(crossing_pairs)
+                pairs.add((min(ia, ib), max(ia, ib)))
+    return pairs
+
+
+def count_crossings(paths) -> int:
+    """Number of trace pairs that properly cross — a valid single-layer routing
+    has zero. Defensive check used in validation and tests."""
+    return len(_crossing_pairs(paths))
 
 
 def validate_routing_constraints(

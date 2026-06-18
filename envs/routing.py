@@ -253,17 +253,27 @@ class RoutingGrid:
 # Negotiated-congestion router internals
 # ------------------------------------------------------------------
 
-# Rectilinear (4-connected) moves ONLY. On a grid, two axis-aligned cell-disjoint
-# paths cannot cross — so a conflict-free routing is automatically planar (no
-# trace crossings) BY CONSTRUCTION. Diagonal moves are intentionally excluded
-# because they permit X-crossings between two paths that share no cell.
-_NEG_NBR = [(-1, 0), (1, 0), (0, -1), (0, 1)]
+# Octilinear (8-connected, 45°) moves. Diagonal moves give shorter routes, but
+# two paths can cross without sharing a cell by using the two complementary
+# diagonals of the same unit square — so diagonal crossings are penalized during
+# routing AND any residual crossing is removed afterwards (see _remove_crossings),
+# guaranteeing a planar (crossing-free) result.
+_NEG_NBR = [(-1, 0), (1, 0), (0, -1), (0, 1),
+            (-1, -1), (-1, 1), (1, -1), (1, 1)]
 
 
-def _astar_cost(blocked, cost, rows, cols, start, end):
-    """Rectilinear A* on a (row, col) grid. `blocked` is a hard boolean mask;
-    `cost` adds a per-cell congestion penalty to each entered cell. Returns a
-    list of (row, col) cells from start to end, or None if unreachable."""
+def _diag_key(r, c, nr, nc):
+    """(unit-square, diagonal-type) for a diagonal move. The two diagonals of one
+    square share `square` and differ in `type`, so type t crosses type 1-t."""
+    return (min(r, nr), min(c, nc)), (0 if (nr - r) == (nc - c) else 1)
+
+
+def _astar_cost(blocked, cell_cost, diag_present, diag_hist, rows, cols, start, end,
+                present_penalty):
+    """Octilinear A* on a (row, col) grid. `blocked` hard-blocks cells; `cell_cost`
+    adds per-cell congestion; a diagonal move additionally pays for crossing the
+    complementary diagonal of its unit square (discouraging X-crossings). Uses an
+    octile heuristic. Returns a list of (row, col) cells, or None."""
     g = {start: 0.0}
     came = {}
     pq = [(0.0, start)]
@@ -283,14 +293,24 @@ def _astar_cost(blocked, cost, rows, cols, start, end):
         r, c = cur
         for dr, dc in _NEG_NBR:
             nr, nc = r + dr, c + dc
-            if 0 <= nr < rows and 0 <= nc < cols and not blocked[nr, nc] and (nr, nc) not in seen:
-                step = 1.4142135624 if (dr and dc) else 1.0
-                ng = g[cur] + step + cost[nr, nc]
-                if ng < g.get((nr, nc), 1e18):
-                    g[(nr, nc)] = ng
-                    came[(nr, nc)] = cur
-                    # Manhattan heuristic — tight & admissible for 4-connected moves.
-                    heapq.heappush(pq, (ng + abs(nr - er) + abs(nc - ec), (nr, nc)))
+            if not (0 <= nr < rows and 0 <= nc < cols) or blocked[nr, nc] or (nr, nc) in seen:
+                continue
+            if dr and dc:
+                if blocked[r, nc] and blocked[nr, c]:
+                    continue                       # don't cut the corner between obstacles
+                sq, t = _diag_key(r, c, nr, nc)
+                step = 1.4142135624
+                extra = present_penalty * diag_present.get((sq, 1 - t), 0) + diag_hist.get((sq, t), 0.0)
+            else:
+                step = 1.0
+                extra = 0.0
+            ng = g[cur] + step + cell_cost[nr, nc] + extra
+            if ng < g.get((nr, nc), 1e18):
+                g[(nr, nc)] = ng
+                came[(nr, nc)] = cur
+                dx, dy = abs(nr - er), abs(nc - ec)
+                h = max(dx, dy) + 0.4142135624 * min(dx, dy)   # octile, admissible
+                heapq.heappush(pq, (ng + h, (nr, nc)))
     return None
 
 
@@ -302,60 +322,107 @@ def _negotiate(blocked, rows, cols, cells, endpoints, order,
                max_iters, present_penalty, history_inc):
     """One negotiated rip-up-and-reroute run, processing nets in `order`.
 
-    Nets may share cells provisionally at a congestion penalty; after each pass
-    a per-cell `history` cost accumulates on over-used cells, so contention
-    resolves over a few passes. Returns per-net cell paths ([(row,col),...] or
-    None)."""
+    Nets may share cells (and complementary diagonals) provisionally at a penalty;
+    after each pass a history cost accumulates on over-used cells AND on unit
+    squares whose two diagonals are both in use, so both cell-overlaps and
+    diagonal X-crossings migrate apart over a few passes. Returns per-net cell
+    paths ([(row,col),...] or None)."""
     n = len(cells)
     history = np.zeros((rows, cols))
     present = np.zeros((rows, cols), dtype=np.int32)
+    diag_present = {}                 # (square, type) -> count
+    diag_hist = {}                    # (square, type) -> history cost
     routes = [None] * n
+    net_diags = [None] * n           # per-net list of diagonal keys
     for _ in range(max_iters):
         for i in order:
             if routes[i]:
                 for cell in routes[i]:
                     present[cell] -= 1
+            if net_diags[i]:
+                for key in net_diags[i]:
+                    diag_present[key] -= 1
             cost = history + present_penalty * present
-            routes[i] = _astar_cost(blocked, cost, rows, cols, cells[i][0], cells[i][1])
-            if routes[i]:
-                for cell in routes[i]:
+            p = _astar_cost(blocked, cost, diag_present, diag_hist, rows, cols,
+                            cells[i][0], cells[i][1], present_penalty)
+            routes[i] = p
+            net_diags[i] = []
+            if p:
+                for cell in p:
                     present[cell] += 1
-        shared = [(r, c) for r, c in zip(*np.where(present > 1))
-                  if (r, c) not in endpoints]
-        if not shared:
+                for k in range(len(p) - 1):
+                    (r, c), (nr, nc) = p[k], p[k + 1]
+                    if (nr - r) and (nc - c):
+                        key = _diag_key(r, c, nr, nc)
+                        diag_present[key] = diag_present.get(key, 0) + 1
+                        net_diags[i].append(key)
+        cell_conf = [(r, c) for r, c in zip(*np.where(present > 1))
+                     if (r, c) not in endpoints]
+        squares = {}
+        for (sq, t), cnt in diag_present.items():
+            if cnt > 0:
+                squares.setdefault(sq, set()).add(t)
+        diag_conf = [sq for sq, ts in squares.items() if len(ts) == 2]
+        if not cell_conf and not diag_conf:
             break
-        for cell in shared:
+        for cell in cell_conf:
             history[cell] += history_inc
+        for sq in diag_conf:
+            diag_hist[(sq, 0)] = diag_hist.get((sq, 0), 0.0) + history_inc
+            diag_hist[(sq, 1)] = diag_hist.get((sq, 1), 0.0) + history_inc
     return routes
 
 
-def _score_routes(routes, cells, rows, cols):
-    """Return (failures, length_in_cells, present_grid). A net fails if it has no
-    path or shares a non-endpoint cell with another net."""
+def _remove_crossings(routes, cells, rows, cols, grid):
+    """Guarantee a planar result: first drop nets that share a cell, then greedily
+    drop nets still involved in a geometric crossing — using the SAME predicate as
+    count_crossings (in world coordinates) — most-conflicting net first, until no
+    crossings remain. Returns the routes list with offending nets set to None."""
     present = np.zeros((rows, cols), dtype=np.int32)
     for rt in routes:
         if rt:
             for cell in rt:
                 present[cell] += 1
-    fails = 0
-    length_cells = 0.0
     for i in range(len(routes)):
-        rt = routes[i]
-        if rt is None or any(present[c] > 1 and c not in cells[i] for c in rt):
-            fails += 1
-        elif rt:
-            length_cells += sum(np.hypot(rt[k + 1][0] - rt[k][0], rt[k + 1][1] - rt[k][1])
-                                for k in range(len(rt) - 1))
-    return fails, length_cells, present
+        if routes[i] and any(present[c] > 1 and c not in cells[i] for c in routes[i]):
+            for cell in routes[i]:
+                present[cell] -= 1
+            routes[i] = None
+    while True:
+        world = [[grid._grid_to_world(c, r) for (r, c) in rt] if rt else None
+                 for rt in routes]
+        segs = []
+        for idx, p in enumerate(world):
+            if p:
+                for k in range(len(p) - 1):
+                    segs.append((idx, p[k], p[k + 1]))
+        deg = {}
+        for a in range(len(segs)):
+            ia, A, B = segs[a]
+            for b in range(a + 1, len(segs)):
+                ib, C, D = segs[b]
+                if ia == ib:
+                    continue
+                d1 = _ccw(C[0], C[1], D[0], D[1], A[0], A[1])
+                d2 = _ccw(C[0], C[1], D[0], D[1], B[0], B[1])
+                d3 = _ccw(A[0], A[1], B[0], B[1], C[0], C[1])
+                d4 = _ccw(A[0], A[1], B[0], B[1], D[0], D[1])
+                if ((d1 > 0) != (d2 > 0)) and ((d3 > 0) != (d4 > 0)):
+                    deg[ia] = deg.get(ia, 0) + 1
+                    deg[ib] = deg.get(ib, 0) + 1
+        if not deg:
+            break
+        routes[max(deg, key=lambda k: deg[k])] = None
+    return routes
 
 
 def route_all_traces(
     board: BoardSpec,
     test_points: List[Tuple[float, float]],
     max_iters: int = 40,
-    present_penalty: float = 3.0,
+    present_penalty: float = 4.0,
     history_inc: float = 1.0,
-    n_starts: int = 8,
+    n_starts: int = 6,
 ) -> Tuple[List[Optional[List[Tuple[float, float]]]], List[float], int]:
     """
     Route all traces with negotiated-congestion rip-up-and-reroute + multi-start.
@@ -416,7 +483,9 @@ def route_all_traces(
         endpoints.add(s)
         endpoints.add(e)
 
-    # Multi-start: informed orders first, then deterministic random restarts.
+    # Multi-start: informed orders first, then deterministic random restarts. Each
+    # run is negotiated, then any residual crossing is removed (planar guarantee);
+    # keep the routing with the fewest dropped nets, early-exit on a full routing.
     dist = [np.hypot(test_points[i][0] - board.traces[i].start_x,
                      test_points[i][1] - board.traces[i].start_y) for i in range(n)]
     base = list(range(n))
@@ -424,31 +493,25 @@ def route_all_traces(
                 sorted(base, key=lambda i: -dist[i]),   # longest first
                 sorted(base, key=lambda i: dist[i])]    # shortest first
     rng = np.random.RandomState(0)
-    best_routes, best_key = None, None
+    best_routes, best_fails = None, None
     for k in range(max(1, n_starts)):
         order = informed[k] if k < len(informed) else list(rng.permutation(n))
         routes = _negotiate(blocked, rows, cols, cells, endpoints, order,
                             max_iters, present_penalty, history_inc)
-        fails, length_cells, _ = _score_routes(routes, cells, rows, cols)
-        key = (fails, length_cells)
-        if best_key is None or key < best_key:
-            best_key, best_routes = key, routes
+        routes = _remove_crossings(routes, cells, rows, cols, grid)
+        fails = sum(1 for rt in routes if rt is None)
+        if best_fails is None or fails < best_fails:
+            best_fails, best_routes = fails, routes
         if fails == 0:
             break
 
     routes = best_routes
-    _, _, present = _score_routes(routes, cells, rows, cols)
-
     paths: List[Optional[List[Tuple[float, float]]]] = []
     lengths: List[float] = []
     failures = 0
     for i in range(n):
         rt = routes[i]
-        s, e = cells[i]
-        illegal = rt is None or any(
-            present[cell] > 1 and cell not in (s, e) for cell in rt
-        )
-        if illegal:
+        if rt is None:
             paths.append(None)
             lengths.append(float('inf'))
             failures += 1

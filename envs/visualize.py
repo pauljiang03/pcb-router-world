@@ -12,24 +12,30 @@ from envs.board import BoardSpec, TP_TO_TP_MIN
 
 def render_board_png(board: BoardSpec, test_points=None, paths=None,
                      filename: str = "board.png", scale: int = 6,
-                     title: Optional[str] = None) -> str:
+                     title: Optional[str] = None, labels: bool = False,
+                     keepout_mm: Optional[float] = None,
+                     legend: bool = False) -> str:
     """Render board, obstacles, starts, test points and routed traces to a PNG
-    using PIL only (no matplotlib). Returns the filename."""
+    using PIL only (no matplotlib).
+
+    Options: `labels` numbers each test point; `keepout_mm` draws each pad's
+    keep-out radius; `legend` draws a key. Returns the filename."""
     from PIL import Image, ImageDraw
     import colorsys
 
-    pad = 22
-    head = 26 if title else 0
+    pad = 24
+    head = 28 if title else 10
+    foot = 74 if legend else 10
     W = int(board.width * scale)
     H = int(board.height * scale)
-    img = Image.new("RGB", (W + 2 * pad, H + 2 * pad + head), "white")
+    img = Image.new("RGB", (W + 2 * pad, H + head + foot), "white")
     d = ImageDraw.Draw(img)
 
     def wx(x):
         return pad + (x - board.x_min) * scale
 
     def wy(y):  # flip vertical so +y is up
-        return pad + head + (board.height - (y - board.y_min)) * scale
+        return head + (board.height - (y - board.y_min)) * scale
 
     # board outline
     d.rectangle([wx(board.x_min), wy(board.y_max), wx(board.x_max), wy(board.y_min)],
@@ -62,13 +68,34 @@ def render_board_png(board: BoardSpec, test_points=None, paths=None,
     for t in board.traces:
         x, y = wx(t.start_x), wy(t.start_y)
         d.rectangle([x - 3, y - 3, x + 3, y + 3], fill="black")
-    # test points (colored, black edge)
+    # test points (colored, black edge), optional keep-out ring + index label
     if test_points:
         for i, (tx, ty) in enumerate(test_points):
             x, y = wx(tx), wy(ty)
+            if keepout_mm:
+                rr = keepout_mm * scale
+                d.ellipse([x - rr, y - rr, x + rr, y + rr], outline=(110, 110, 110))
             d.ellipse([x - 5, y - 5, x + 5, y + 5], fill=colors[i % n], outline="black")
+            if labels:
+                d.text((x + 6, y - 6), str(i), fill="black")
     if title:
-        d.text((pad, 7), title, fill="black")
+        d.text((pad, 9), title, fill="black")
+    if legend:
+        ly = head + H + 18
+        d.rectangle([pad, ly - 4, pad + 8, ly + 4], fill="black")
+        d.text((pad + 14, ly - 5), "start (connector pin)", fill="black")
+        d.ellipse([pad + 200, ly - 5, pad + 210, ly + 5], fill=(0, 150, 200), outline="black")
+        d.text((pad + 216, ly - 5), "test point / pad (numbered)", fill="black")
+        d.line([pad + 430, ly, pad + 460, ly], fill=(0, 150, 200), width=2)
+        d.text((pad + 466, ly - 5), "routed trace (45 deg)", fill="black")
+        ly2 = ly + 22
+        d.rectangle([pad, ly2 - 4, pad + 8, ly2 + 4], fill=(255, 175, 175), outline=(190, 0, 0))
+        d.text((pad + 14, ly2 - 5), "obstacle / keep-out zone", fill="black")
+        d.rectangle([pad + 200, ly2 - 4, pad + 208, ly2 + 4], outline=(150, 0, 190))
+        d.text((pad + 216, ly2 - 5), "connector outline", fill="black")
+        if keepout_mm:
+            d.ellipse([pad + 430, ly2 - 6, pad + 442, ly2 + 6], outline=(110, 110, 110))
+            d.text((pad + 448, ly2 - 5), "pad keep-out radius", fill="black")
     img.save(filename)
     return filename
 

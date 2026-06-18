@@ -253,14 +253,17 @@ class RoutingGrid:
 # Negotiated-congestion router internals
 # ------------------------------------------------------------------
 
-_NEG_NBR = [(-1, 0), (1, 0), (0, -1), (0, 1),
-            (-1, -1), (-1, 1), (1, -1), (1, 1)]
+# Rectilinear (4-connected) moves ONLY. On a grid, two axis-aligned cell-disjoint
+# paths cannot cross — so a conflict-free routing is automatically planar (no
+# trace crossings) BY CONSTRUCTION. Diagonal moves are intentionally excluded
+# because they permit X-crossings between two paths that share no cell.
+_NEG_NBR = [(-1, 0), (1, 0), (0, -1), (0, 1)]
 
 
 def _astar_cost(blocked, cost, rows, cols, start, end):
-    """A* on a (row, col) grid. `blocked` is a hard boolean mask; `cost` adds a
-    per-cell congestion penalty to each entered cell. Returns a list of
-    (row, col) cells from start to end, or None if unreachable."""
+    """Rectilinear A* on a (row, col) grid. `blocked` is a hard boolean mask;
+    `cost` adds a per-cell congestion penalty to each entered cell. Returns a
+    list of (row, col) cells from start to end, or None if unreachable."""
     g = {start: 0.0}
     came = {}
     pq = [(0.0, start)]
@@ -286,7 +289,8 @@ def _astar_cost(blocked, cost, rows, cols, start, end):
                 if ng < g.get((nr, nc), 1e18):
                     g[(nr, nc)] = ng
                     came[(nr, nc)] = cur
-                    heapq.heappush(pq, (ng + np.hypot(nr - er, nc - ec), (nr, nc)))
+                    # Manhattan heuristic — tight & admissible for 4-connected moves.
+                    heapq.heappush(pq, (ng + abs(nr - er) + abs(nc - ec), (nr, nc)))
     return None
 
 
@@ -466,6 +470,36 @@ def _resample_path(arr: np.ndarray, n: int = 200) -> np.ndarray:
     return arr[idx]
 
 
+def _ccw(ax, ay, bx, by, cx, cy):
+    return (cy - ay) * (bx - ax) - (by - ay) * (cx - ax)
+
+
+def count_crossings(paths) -> int:
+    """Count pairs of traces whose routed polylines properly cross. Two traces
+    crossing is illegal on a single layer; a valid routing has zero crossings.
+    (The rectilinear router guarantees zero among conflict-free nets, so this is
+    a defensive check used in validation and tests.)"""
+    segs = []
+    for idx, p in enumerate(paths):
+        if p:
+            for k in range(len(p) - 1):
+                segs.append((idx, p[k], p[k + 1]))
+    crossing_pairs = set()
+    for a in range(len(segs)):
+        ia, A, B = segs[a]
+        for b in range(a + 1, len(segs)):
+            ib, C, D = segs[b]
+            if ia == ib:
+                continue
+            d1 = _ccw(C[0], C[1], D[0], D[1], A[0], A[1])
+            d2 = _ccw(C[0], C[1], D[0], D[1], B[0], B[1])
+            d3 = _ccw(A[0], A[1], B[0], B[1], C[0], C[1])
+            d4 = _ccw(A[0], A[1], B[0], B[1], D[0], D[1])
+            if ((d1 > 0) != (d2 > 0)) and ((d3 > 0) != (d4 > 0)):
+                crossing_pairs.add((min(ia, ib), max(ia, ib)))
+    return len(crossing_pairs)
+
+
 def validate_routing_constraints(
     board: BoardSpec,
     paths: List[Optional[List[Tuple[float, float]]]],
@@ -524,6 +558,8 @@ def validate_routing_constraints(
                 violations.append(("trace_to_trace", vi[a], vi[b],
                                    f"Traces {vi[a]},{vi[b]}: edge dist {mee:.3f}mm"))
 
+    crossings = count_crossings(paths)
     return {"violations": violations, "trace_to_trace_min": t2t_min,
             "trace_to_edge_min": t2e_min, "trace_to_obstacle_min": t2o_min,
-            "all_valid": len(violations) == 0}
+            "crossings": crossings,
+            "all_valid": len(violations) == 0 and crossings == 0}

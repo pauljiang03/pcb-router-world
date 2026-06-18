@@ -11,7 +11,7 @@ from envs.board import (
     load_te_example, generate_candidate_grid, check_tp_spacing,
     _is_valid_tp_position, MAX_CANDIDATES, TP_TO_TP_MIN, TP_TO_EDGE_MIN,
 )
-from envs.routing import route_all_traces, validate_routing_constraints
+from envs.routing import route_all_traces, validate_routing_constraints, count_crossings
 from envs.pcb_env import TPPlacementEnv
 
 
@@ -144,6 +144,22 @@ def test_training_env_wrapper_chain():
         steps += 1
     assert done
     assert "reward_components" in info
+
+
+def test_router_output_never_crosses():
+    """The rectilinear router is planar by construction: cell-disjoint axis-aligned
+    paths cannot cross, and conflicting nets are dropped — so route_all_traces
+    output has zero trace crossings regardless of the (crossing-prone) placement."""
+    b = load_te_example(num_traces=16, seed=2)
+    c, rc = generate_candidate_grid(b, 6.5); c = c[:rc]
+    placed = []                                   # greedy (crossing-prone) placement
+    for t in b.traces:
+        d = np.hypot(c[:, 0] - t.start_x, c[:, 1] - t.start_y)
+        for i in np.argsort(d):
+            if check_tp_spacing(placed, *c[i]):
+                placed.append(tuple(c[i])); break
+    paths, _, _ = route_all_traces(b, placed)
+    assert count_crossings(paths) == 0
 
 
 if __name__ == "__main__":

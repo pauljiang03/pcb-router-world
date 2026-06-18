@@ -12,9 +12,16 @@ training). Reproduction commands are in §8.*
   radial fan is the trivial witness). The historical failures were the **router
   not finding it**, not infeasibility — exactly the hypothesis that motivated
   this work.
-- The router we now ship — **negotiated-congestion rip-up-and-reroute + escape
-  carving + multi-start** — routes a reasonable 20-trace placement **20/20**
-  within **~6 % of the straight-line length lower bound** in ~0.4 s.
+- **Traces must never cross (single layer).** The router is **rectilinear**
+  (axis-aligned moves only), so two cell-disjoint paths *cannot* cross — a
+  conflict-free routing is **planar by construction**, and conflicting nets are
+  dropped, so `route_all_traces` output has **zero crossings, always**
+  (regression-tested). An earlier diagonal version reported "0 failures" while
+  silently producing **8 crossing pairs**; that bug is fixed.
+- With a **non-crossing angular placement** + negotiated rip-up-reroute +
+  escape-carving + multi-start, a 20-trace board routes **fully in 7/9 seeds and
+  with 0 crossings in 9/9**, in ~3.5 s. (Rectilinear is slower and longer than
+  diagonal — the price of guaranteed planarity; tunable via `n_starts`.)
 - The single most important empirical finding for *future* work: **routing
   guidance (net order / waypoints) is a large, learnable signal.** The *same*
   placement routes with anywhere from **1 to 6 failures purely depending on net
@@ -72,19 +79,28 @@ result.
 *Effect (greedy 20-trace, best-of-K):* single→24 starts drove seeds 0,1,3,5 from
 {1,3,2,2} failures **to 0**.
 
-### 2.4 Benchmark (20 traces, 9 seeds, multi-start = 8)
+### 2.4 Planarity guarantee
+The router moves only on the 4-connected grid (`_NEG_NBR` in `routing.py`). Two
+axis-aligned paths can only intersect at a shared cell, which the conflict check
+forbids; any net that cannot avoid a conflict is dropped to a failure. Therefore
+**every returned routing is planar — zero trace crossings — by construction**,
+regardless of placement (`test_router_output_never_crosses`).
 
-| Placement | Mean failures | Boards fully routed | Length / lower-bound | Time |
+### 2.5 Benchmark (20 traces, 9 seeds, rectilinear, multi-start = 8)
+
+| Placement | Mean failures | Fully routed | Crossings | Time |
 |---|---|---|---|---|
-| **Fan** (non-crossing, spread) | **0.11** | **8/9** | **1.06×** | 0.4 s |
-| Greedy (TPs clustered at connector) | 1.44 | 1/9 | 1.26× | 0.7 s |
+| **Angular** (non-crossing by construction) | **0.67** | **7/9** | **0 / 9 seeds** | ~3.5 s |
+| Greedy (clustered) | high | rarely | 0 (failed nets dropped) | — |
 
-**Reading:** given a *reasonable* placement the router is essentially solved
-(≈20/20, near-optimal length). Greedy clustering is genuinely hard — that is a
-**placement** problem, which is the learning agent's job, not the router's.
-This is the placement→routability frontier: greedy is short (~590 mm) but
-congested; fan is routable but longer (~1100 mm). Navigating that frontier is
-the "intelligent solution."
+**Reading:** with a placement that admits a planar routing (the angular
+assignment, §4-adjacent), the router connects ~20/20 with **zero crossings**. A
+placement that *requires* crossings (clustered/greedy) is impossible on one layer,
+so it surfaces honestly as failures — never as crossings. Choosing a placement
+that is non-crossing, short, and compact is the **agent's** job; the router
+guarantees a legal planar result or reports failure. (Manhattan routing is longer
+than the earlier diagonal routes — that length is the cost of planarity, and is
+recovered by placement quality, not by letting traces cross.)
 
 *Tradeoff:* multi-start costs ~`n_starts`× A* runs. It's tunable
 (`route_all_traces(..., n_starts=)`); training can use a small value and

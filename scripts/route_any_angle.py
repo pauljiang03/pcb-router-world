@@ -1,16 +1,16 @@
-"""Any-angle routing with guaranteed trace-to-trace clearance (smaller board + obstacles).
+"""Challenging board (obstacle 'moat' — traces can't fan straight out), routed with
+GUARANTEED trace-to-trace clearance.
 
-Route octilinear first (clearance handled by the grid), then string-pull to ANY-ANGLE
-with `any_angle_shortcut`: a straight segment is accepted only if it clears all
-obstacles AND stays >= the trace pitch from every other net (exact segment-to-segment
-distance). So any-angle shortens traces and NEVER introduces a spacing violation.
+- `challenge_board`: a moat of keep-outs rings the connector with only a few gaps, so
+  traces must funnel through them (forces detours + usually a 2nd layer).
+- Rectilinear base (`route_auto_layers(diagonal=False)`): axis-adjacent cells are
+  exactly the trace pitch, so there is no 45-degree parallel-diagonal gap (which would
+  be only pitch/sqrt(2) ~= 0.94mm < pitch). Layers are assigned by routability.
+- `any_angle_shortcut` per layer: straightens to ANY-ANGLE only where the segment stays
+  >= the pitch from same-layer traces (exact distance) -> shorter, clearance preserved.
 
-`min_trace_separation` reports the exact trace-to-trace clearance. Note: at minimum
-pin pitch, parallel 45-degree traces are inherently pitch*sin45 ~= 0.94mm apart (< the
-1.33mm pitch) — a property of fanning out at 45 degrees, which the verifier now flags;
-any-angle does not make it worse.
-
-Run from the repo root:  python scripts/route_any_angle.py
+Every same-layer pair stays >= the pitch (`min_trace_separation`), with 0 same-layer
+crossings. Run from the repo root:  python scripts/route_any_angle.py [--gaps K]
 """
 import sys
 import pathlib
@@ -19,49 +19,57 @@ import argparse
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 import numpy as np
-from envs.board import (load_te_example, equal_length_placement,
-                        Obstacle, TRACE_TO_TRACE_MIN)
-from envs.routing import (route_all_traces, any_angle_shortcut, count_crossings,
+from envs.board import challenge_board
+from envs.routing import (route_auto_layers, any_angle_shortcut, count_crossings,
                           min_trace_separation, CELL_SIZE, TP_CLEARANCE_CELLS)
 
 
-def _len(paths):
+def _len(P):
     return sum(sum(np.hypot(p[k+1][0]-p[k][0], p[k+1][1]-p[k][1]) for k in range(len(p)-1))
-               for p in paths if p)
+               for p in P if p)
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--num_traces", type=int, default=20)
-    ap.add_argument("--seed", type=int, default=6)
-    ap.add_argument("--board_size", type=float, default=130.0)
+    ap.add_argument("--board_size", type=float, default=120.0)
+    ap.add_argument("--gaps", type=int, default=3)
     ap.add_argument("--out", type=str, default="eval_results/router_any_angle.png")
     a = ap.parse_args()
     n = a.num_traces
 
-    board = load_te_example(num_traces=n, seed=a.seed, board_size=a.board_size)
-    for fx, fy in [(0.26, 0.70), (0.74, 0.30)]:                 # extra keep-outs
-        board.rect_obstacles.append(Obstacle(cx=a.board_size*fx, cy=a.board_size*fy,
-                                             width=9.0, height=9.0,
-                                             clearance=TRACE_TO_TRACE_MIN, name="keepout"))
-    placed = equal_length_placement(board, n)
-    octi, L, f = route_all_traces(board, placed)
-    aa = any_angle_shortcut(octi, board)                        # clearance-verified any-angle
+    board, placed = challenge_board(a.board_size, n, a.gaps)
+    paths, L, lof, f, lx = route_auto_layers(board, placed, max_layers=6, diagonal=False)
+    used = sorted(set(l for l in lof if l >= 0))
 
-    lo, la = _len(octi), _len(aa)
-    print(f"board {a.board_size:.0f}mm + 2 obstacles, {n} traces, pitch {CELL_SIZE:.3f}mm")
-    print(f"  octilinear: routed {n-f}/{n}  len {lo:.0f}mm  crossings {count_crossings(octi)}  "
-          f"min_trace_sep {min_trace_separation(octi):.3f}")
-    print(f"  any-angle : routed {n-f}/{n}  len {la:.0f}mm ({100*(lo-la)/lo:.1f}% shorter)  "
-          f"crossings {count_crossings(aa)}  min_trace_sep {min_trace_separation(aa):.3f}")
+    aa = list(paths)                                          # any-angle, per layer
+    for layer in used:
+        idx = [i for i in range(n) if lof[i] == layer]
+        sc = any_angle_shortcut([paths[i] for i in idx], board)
+        for k, i in enumerate(idx):
+            aa[i] = sc[k]
+
+    def per(fn, P):
+        return min((fn([P[i] for i in range(n) if lof[i] == layer]) for layer in used),
+                   default=float('inf'))
+    def per_cross(P):
+        return max((count_crossings([P[i] for i in range(n) if lof[i] == layer]) for layer in used),
+                   default=0)
+
+    print(f"challenge moat board {a.board_size:.0f}mm, {a.gaps} gaps, {n} traces (pitch {CELL_SIZE:.2f}mm)")
+    print(f"  routed {n-f}/{n}  layers {len(used)}  vias {sum(1 for l in lof if l >= 1)}  "
+          f"same-layer crossings {per_cross(aa)}")
+    print(f"  per-layer min trace separation: base {per(min_trace_separation, paths):.2f} -> "
+          f"any-angle {per(min_trace_separation, aa):.2f}mm  (must be >= {CELL_SIZE:.2f})")
+    print(f"  total length: any-angle {_len(aa):.0f}mm")
 
     try:
         from envs.visualize import render_board_png
         render_board_png(
             board, placed, aa, a.out, labels=True, legend=True,
-            keepout_mm=TP_CLEARANCE_CELLS * CELL_SIZE,
-            title=(f"Any-angle (clearance-verified): {n-f}/{n} routed, {100*(lo-la)/lo:.0f}% shorter, "
-                   f"{count_crossings(aa)} crossings, min trace sep {min_trace_separation(aa):.2f}mm"))
+            path_layers=lof, keepout_mm=TP_CLEARANCE_CELLS * CELL_SIZE,
+            title=(f"Challenge moat ({a.gaps} gaps) + clearance-ensured any-angle: {n-f}/{n} routed, "
+                   f"{len(used)} layers, min trace sep {per(min_trace_separation, aa):.2f}mm >= pitch {CELL_SIZE:.2f}"))
         print("figure:", a.out)
     except Exception as e:
         print("(figure skipped:", e, ")")

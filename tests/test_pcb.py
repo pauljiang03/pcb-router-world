@@ -283,6 +283,22 @@ def test_any_angle_shortens_without_reducing_clearance():
     assert count_crossings(aa) == 0                             # stays planar
 
 
+def test_rectilinear_base_guarantees_pitch_clearance():
+    """diagonal=False (rectilinear base) keeps every pair of traces >= the trace pitch
+    (axis-adjacent cells are exactly the pitch) — unlike 45 deg, which allows parallel
+    diagonals at pitch/sqrt(2). any-angle on top preserves the clearance."""
+    from envs.board import load_te_example, equal_length_placement
+    from envs.routing import any_angle_shortcut, min_trace_separation, CELL_SIZE
+    b = load_te_example(num_traces=14, seed=6, board_size=120.0)
+    placed = equal_length_placement(b, 14)
+    p, L, f = route_all_traces(b, placed, diagonal=False)
+    assert (14 - f) >= 12                                       # rectilinear still routes
+    assert min_trace_separation(p) >= CELL_SIZE - 0.05         # >= pitch (clearance ensured)
+    aa = any_angle_shortcut(p, b)
+    assert min_trace_separation(aa) >= CELL_SIZE - 0.05        # any-angle preserves it
+    assert count_crossings(aa) == 0
+
+
 def test_router_output_never_crosses():
     """route_all_traces output is always planar: the octilinear router penalizes
     diagonal X-crossings and a final pass drops any net still crossing another, so

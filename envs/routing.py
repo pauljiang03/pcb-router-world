@@ -276,7 +276,7 @@ def _diag_key(r, c, nr, nc):
 
 
 def _astar_cost(blocked, cell_cost, diag_present, diag_hist, rows, cols, start, end,
-                present_penalty, tp_owner=None, net_id=-1):
+                present_penalty, tp_owner=None, net_id=-1, diagonal=True):
     """Octilinear A* on a (row, col) grid. `blocked` hard-blocks cells; `cell_cost`
     adds per-cell congestion; a diagonal move additionally pays for crossing the
     complementary diagonal of its unit square (discouraging X-crossings). If
@@ -300,7 +300,7 @@ def _astar_cost(blocked, cell_cost, diag_present, diag_hist, rows, cols, start, 
                 path.append(cur)
             return path[::-1]
         r, c = cur
-        for dr, dc in _NEG_NBR:
+        for dr, dc in (_NEG_NBR if diagonal else _NEG_NBR[:4]):   # 4-conn = rectilinear
             nr, nc = r + dr, c + dc
             if not (0 <= nr < rows and 0 <= nc < cols) or blocked[nr, nc] or (nr, nc) in seen:
                 continue
@@ -330,7 +330,7 @@ def _astar_cost(blocked, cell_cost, diag_present, diag_hist, rows, cols, start, 
 # ------------------------------------------------------------------
 
 def _negotiate(blocked, rows, cols, cells, endpoints, order,
-               max_iters, present_penalty, history_inc, tp_owner=None):
+               max_iters, present_penalty, history_inc, tp_owner=None, diagonal=True):
     """One negotiated rip-up-and-reroute run, processing nets in `order`.
 
     Nets may share cells (and complementary diagonals) provisionally at a penalty;
@@ -355,7 +355,7 @@ def _negotiate(blocked, rows, cols, cells, endpoints, order,
                     diag_present[key] -= 1
             cost = history + present_penalty * present
             p = _astar_cost(blocked, cost, diag_present, diag_hist, rows, cols,
-                            cells[i][0], cells[i][1], present_penalty, tp_owner, i)
+                            cells[i][0], cells[i][1], present_penalty, tp_owner, i, diagonal)
             routes[i] = p
             net_diags[i] = []
             if p:
@@ -420,6 +420,7 @@ def route_all_traces(
     present_penalty: float = 4.0,
     history_inc: float = 1.0,
     n_starts: int = 6,
+    diagonal: bool = True,
 ) -> Tuple[List[Optional[List[Tuple[float, float]]]], List[float], int]:
     """
     Route all traces with negotiated-congestion rip-up-and-reroute + multi-start.
@@ -514,7 +515,7 @@ def route_all_traces(
     for k in range(max(1, n_starts)):
         order = informed[k] if k < len(informed) else list(rng.permutation(n))
         routes = _negotiate(blocked, rows, cols, cells, endpoints, order,
-                            max_iters, present_penalty, history_inc, tp_owner)
+                            max_iters, present_penalty, history_inc, tp_owner, diagonal)
         routes = _remove_crossings(routes, cells, rows, cols, grid)
         fails = sum(1 for rt in routes if rt is None)
         if best_fails is None or fails < best_fails:

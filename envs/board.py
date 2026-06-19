@@ -386,6 +386,44 @@ def equal_length_placement(board: BoardSpec, num_traces: int):
     return placed
 
 
+def challenge_board(board_size: float = 120.0, num_traces: int = 20,
+                    n_gaps: int = 3, seed: int = 6):
+    """A deliberately hard board: a 'moat' of obstacles rings the connector, leaving
+    only n_gaps gaps, so traces CANNOT fan straight out — they must funnel through the
+    gaps (forcing detours, congestion, and usually a second layer). Test points sit
+    OUTSIDE the moat, matched pin<->TP by angle. Returns (board, placed)."""
+    board = load_te_example(num_traces=num_traces, seed=seed, board_size=board_size)
+    cx = board.connector_x + board.connector_w / 2
+    cy = board.connector_y + board.connector_h / 2
+    R = board_size * 0.30
+    gaps = [2 * np.pi * g / n_gaps for g in range(n_gaps)]
+    for i in range(22):
+        ang = 2 * np.pi * i / 22
+        if any(abs(((ang - g + np.pi) % (2 * np.pi)) - np.pi) < 0.45 for g in gaps):
+            continue                                          # leave the gaps open
+        board.rect_obstacles.append(Obstacle(
+            cx=cx + R * np.cos(ang), cy=cy + R * np.sin(ang),
+            width=board_size * 0.055, height=board_size * 0.055,
+            clearance=TRACE_TO_TRACE_MIN, name="moat"))
+    cand, real = generate_candidate_grid(board, 6.5)
+    cand = cand[:real]
+    far = cand[np.hypot(cand[:, 0] - cx, cand[:, 1] - cy) > R * 1.25]   # outside the moat
+    chosen = []
+    for i in np.argsort(-np.hypot(far[:, 0] - cx, far[:, 1] - cy)):
+        if len(chosen) >= num_traces:
+            break
+        if check_tp_spacing(chosen, *far[i]):
+            chosen.append(tuple(far[i]))
+    tps = sorted(chosen, key=lambda p: np.arctan2(p[1] - cy, p[0] - cx))
+    pins = sorted(range(num_traces),
+                  key=lambda i: np.arctan2(board.traces[i].start_y - cy,
+                                           board.traces[i].start_x - cx))
+    placed = [None] * num_traces
+    for k, i in enumerate(pins):
+        placed[i] = tps[k] if k < len(tps) else tps[-1]
+    return board, placed
+
+
 def generate_candidate_grid(board: BoardSpec, resolution: float = 6.5,
                             max_candidates: int = MAX_CANDIDATES
                             ) -> Tuple[np.ndarray, int]:

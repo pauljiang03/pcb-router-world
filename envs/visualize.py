@@ -102,7 +102,7 @@ def render_board_png(board: BoardSpec, test_points=None, paths=None,
         d.ellipse([pad + 200, ly - 5, pad + 210, ly + 5], fill=(0, 150, 200), outline="black")
         d.text((pad + 216, ly - 5), "test point / pad (numbered)", fill="black")
         d.line([pad + 430, ly, pad + 460, ly], fill=(0, 150, 200), width=2)
-        d.text((pad + 466, ly - 5), "routed trace (45 deg)", fill="black")
+        d.text((pad + 466, ly - 5), "routed trace", fill="black")
         ly2 = ly + 22
         d.rectangle([pad, ly2 - 4, pad + 8, ly2 + 4], fill=(255, 175, 175), outline=(190, 0, 0))
         d.text((pad + 14, ly2 - 5), "obstacle / keep-out zone", fill="black")

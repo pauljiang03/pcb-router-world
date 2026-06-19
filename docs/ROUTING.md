@@ -168,28 +168,25 @@ Stress-tested on shrinking boards (160 → 95 mm, greedy + spread placements). R
   board-filling spread's 0.44 → 0.39 (~2× better). Post-hoc meandering is space-
   limited because the *short* traces sit in the congested region near the connector,
   so length must be controlled at placement time.
-- **Any-angle routing, clearance-verified** (`any_angle_shortcut`). String-pulls a
-  routed path into straight any-angle segments, accepting a shortcut only if it clears
-  obstacles AND stays ≥ the trace pitch from every other net (exact segment-to-segment
-  distance). Shorter traces, 0 crossings, and it **cannot introduce a spacing
-  violation** — it never reduces trace-to-trace separation.
 - **Exact clearance verifier** (`min_trace_separation`; `trace_to_trace_center_min` +
   `clearance_ok` in `validate_routing_constraints`). The old check used resampled
   points + a loose threshold and **missed sub-pitch spacing**; this is exact.
 - **Rectilinear base for guaranteed clearance** (`route_all_traces(diagonal=False)`).
+- *(Optional, off by default — angles stay ≤ 45°:* `any_angle_shortcut` can string-pull
+  to arbitrary angles while verifying ≥ pitch, but the project keeps routes octilinear.)*
 
 **Finding + fix — 45° at minimum pin pitch can't keep full clearance.** Two 45°
 traces leaving pins one pitch apart are inherently `pitch·sin45 ≈ 0.94 mm` apart (< the
 1.33 mm pitch) — geometric, not a bug. A *diagonal-safe* grid (pitch·√2) is infeasible
 (min-pitch pins then collide); a parallel-diagonal penalty is a no-op (forced). **The
-fix that works: a rectilinear base** (axis-adjacent cells are *exactly* the pitch), then
-**any-angle smoothing on top** (each shortcut verified ≥ pitch). On a deliberately hard
-**"moat" board** (`challenge_board` — obstacles ring the connector with only a few gaps
-so traces must funnel through, `python scripts/route_any_angle.py`, figure
-`router_any_angle.png`): **20/20 routed, 2 layers, 0 same-layer crossings**, and
-per-layer min trace separation **0.94 → 1.33 mm (octilinear → rectilinear), preserved
-by any-angle**, at ~5–15% more length. So: clearance is *guaranteed* (≥ pitch), still
-any-angle, on boards where traces can't fan straight out.
+fix that works: a rectilinear base** (`diagonal=False` — axis-adjacent cells are
+*exactly* the pitch, so there is no diagonal gap). On a deliberately hard **"moat"
+board** (`challenge_board` — obstacles ring the connector with only a few gaps so traces
+must funnel through, `python scripts/gen_figures.py`): per-layer min trace separation
+goes **0.94 mm (45°, `router_challenge_45deg.png`) → 1.33 mm = pitch (rectilinear,
+`router_challenge_rectilinear.png`)**, both **20/20 routed, 2 layers, 0 same-layer
+crossings**, rectilinear ~5–15% longer. So clearance is *guaranteed* (≥ pitch) on boards
+where traces can't fan straight out, while staying ≤ 45°.
 
 **Tested and rejected:**
 - **Min-via layer assignment by crossing-graph coloring** — *worse* than the greedy

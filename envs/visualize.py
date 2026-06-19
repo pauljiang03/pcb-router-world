@@ -25,7 +25,8 @@ def render_board_png(board: BoardSpec, test_points=None, paths=None,
 
     pad = 24
     head = 28 if title else 10
-    foot = 74 if legend else 10
+    _has_inner = bool(path_layers) and any(l >= 1 for l in path_layers)
+    foot = (96 if _has_inner else 74) if legend else 10
     W = int(board.width * scale)
     H = int(board.height * scale)
     img = Image.new("RGB", (W + 2 * pad, H + head + foot), "white")
@@ -111,6 +112,12 @@ def render_board_png(board: BoardSpec, test_points=None, paths=None,
         if keepout_mm:
             d.ellipse([pad + 430, ly2 - 6, pad + 442, ly2 + 6], outline=(110, 110, 110))
             d.text((pad + 448, ly2 - 5), "pad keep-out radius", fill="black")
+        if _has_inner:
+            ly3 = ly2 + 22
+            for sx in range(0, 30, 9):                    # a dashed sample line
+                d.line([pad + sx, ly3, pad + min(sx + 5, 30), ly3], fill=(0, 150, 200), width=2)
+            d.text((pad + 36, ly3 - 5),
+                   "dashed = inner layer (2nd copper; inter-layer crossings are vias)", fill="black")
     img.save(filename)
     return filename
 

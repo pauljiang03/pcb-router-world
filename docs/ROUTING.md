@@ -133,19 +133,48 @@ Reproduce: `python scripts/route_to_top.py --rows {1,2}` (figure
 `eval_results/router_top_fan.png`). A *central* connector cannot route to one side
 at all (its downward-escaping row gets stuck).
 
-**Two layers gets all 20** (`route_two_layer` + `two_layer_placement`,
-`python scripts/route_two_layer.py`, figure `router_two_layer.png`). The top row
-routes on layer 0 around the connector; the bottom row vias down and routes
-straight up **under** the connector on layer 1 (a top-layer-only obstacle), so each
-layer is a clean planar up-fan — **20/20 routed, 0 same-layer crossings**, then
-length-matched across both layers (inter-layer crossings are legal vias). Two
-choices drive the result: the **layer assignment** (which row → which layer) and
-the **routing order** within each layer (the multi-start search) — both are exactly
-the kind of guidance a learned policy could supply (§4).
+### 2.8 Multi-layer routing (automatic layer assignment)
+`route_auto_layers` (`python scripts/route_multilayer.py`, figure
+`router_multilayer.png`). The non-routing zone is a **keep-out, so it blocks every
+layer** — *not* a top-layer-only component. The router assigns layers by
+*routability*: route as many nets as fit planar on layer 0, push the rest to the
+next layer, repeat. Same-layer crossings stay forbidden; two nets on **different**
+layers may cross — an inter-layer **via** at their endpoints. With test points
+**spread** around the connector (`spread_placement`, not bucketed into per-layer
+rows) a good placement routes on a **single layer, 0 crossings**; denser placements
+cascade to more layers and the **via count** is the number of nets on inner layers.
+The two levers — **layer assignment** (found here by routability) and **routing
+order** within each layer (the multi-start) — are exactly the guidance a learned
+policy could supply (§4). (Note: routing all 20 of a 2-row connector to one edge
+stays hard even multi-layer, because the non-routing zone *between* the rows blocks
+the lower row's wrap on every layer.)
 
 *Tradeoff:* multi-start costs ~`n_starts`× A* runs. It's tunable
 (`route_all_traces(..., n_starts=)`); training can use a small value and
 evaluation a larger one.
+
+### 2.9 Further improvements (roadmap)
+Done this pass: **auto multi-layer assignment** (§2.8) and **spread endpoints**.
+Other concrete, CPU-only improvements, roughly by ROI:
+- **Min-crossing / min-via layer assignment** — the greedy cascade minimizes
+  *layers* but not *inter-layer crossings/vias*; a circular (2-page) layout or a
+  swap-based local search would cut vias on dense boards.
+- **Length-aware routing** — fold the length target into A*'s cost so traces come
+  out near-equal during routing, instead of relying on the Stage-3 meander, which
+  is space-limited (the 0.37 → 0.29 residual in the multi-layer demo).
+- **Any-angle (Theta\*)** — route off the 8-way grid for shorter, smoother traces.
+- **Adaptive negotiation** — raise present/history penalties on stagnation rather
+  than a fixed schedule; resolves congestion in fewer iterations.
+- **Smarter rip-up** — when a net won't route, rip up the *most-congested* crossing
+  net and retry, instead of dropping it (current `_remove_crossings`).
+- **Differential pairs / matched buses** — route coupled nets together with matched
+  length and spacing.
+- **Manufacturability pass** — teardrops at pads, acute-angle removal, true
+  geometric DRC (vs the current grid-cell clearance).
+- **Net ordering** (the lever you flagged) — order changes the routed count by
+  several nets; the multi-start samples it and `scripts/gen_ordering_data.py`
+  distills a learned order (§4.1). Learned **layer assignment** is the natural
+  companion lever.
 
 ---
 

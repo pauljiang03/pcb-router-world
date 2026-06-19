@@ -66,7 +66,7 @@ def render_board_png(board: BoardSpec, test_points=None, paths=None,
                 continue
             pts = [(wx(x), wy(y)) for x, y in p]
             col = colors[i % n]
-            if path_layers and i < len(path_layers) and path_layers[i] == 1:
+            if path_layers and i < len(path_layers) and path_layers[i] >= 1:
                 for k in range(len(pts) - 1):
                     (x0, y0), (x1, y1) = pts[k], pts[k + 1]
                     seg = ((x1 - x0) ** 2 + (y1 - y0) ** 2) ** 0.5

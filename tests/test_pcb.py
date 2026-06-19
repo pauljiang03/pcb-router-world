@@ -230,17 +230,25 @@ def test_two_row_edge_wrap_and_equalize():
     assert s1 < s0                                      # length-matching reduces spread
 
 
-def test_two_layer_routes_all_to_top():
-    """Two layers route ALL of a 2-row connector to the top: the lower row vias to
-    layer 2 and routes straight up under the connector, so every net routes and each
-    layer is planar (0 same-layer crossings)."""
-    from envs.board import load_edge_board_2row, two_layer_placement
-    from envs.routing import route_two_layer
-    b = load_edge_board_2row(num_traces=12, board_w=200.0, board_h=210.0)
-    placed, layer_of = two_layer_placement(b, 12)
-    paths, L, f, layer_x = route_two_layer(b, placed, layer_of)
-    assert f == 0                                       # all 12 route across the 2 layers
-    assert all(x == 0 for x in layer_x.values())        # each layer planar
+def test_auto_layers_planar_per_layer_and_respects_nrz():
+    """route_auto_layers invariants: every layer is planar (0 same-layer crossings),
+    no routed point passes through the non-routing-zone body (obstacles block every
+    layer), and a spread placement routes (nearly) all nets."""
+    from envs.board import load_te_example, spread_placement
+    from envs.routing import route_auto_layers
+    b = load_te_example(num_traces=12, seed=6)
+    placed = spread_placement(b, 12)
+    paths, L, layer_of, f, lx = route_auto_layers(b, placed, max_layers=4)
+    assert all(x == 0 for x in lx.values())              # every layer planar (key invariant)
+    assert (12 - f) >= 10                                 # spread placement routes (nearly) all
+
+    nrz = [o for o in b.rect_obstacles if o.name == "non_routing_zone"]
+    def deep_in_nrz(x, y):                                # inside the body (not boundary rounding)
+        return any(abs(x - o.cx) <= o.width / 2 - 1.5 and abs(y - o.cy) <= o.height / 2 - 1.5
+                   for o in nrz)
+    for p in paths:
+        if p:
+            assert not any(deep_in_nrz(x, y) for (x, y) in p)   # never through the non-routing zone
 
 
 def test_router_output_never_crosses():

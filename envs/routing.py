@@ -536,33 +536,40 @@ def route_all_traces(
     return paths, lengths, failures
 
 
-def route_two_layer(board, test_points, layer_of, **kwargs):
-    """Route a multi-layer board. Nets on layer 0 route on the top copper (with all
-    obstacles); nets on any other layer route WITHOUT the rect/circ obstacles (the
-    connector body / components are top-layer-only, reached by a via to an inner
-    layer). Each layer is routed planar and independently by route_all_traces, so
-    two traces on DIFFERENT layers may cross (a via), while same-layer crossings are
-    still forbidden. Returns (paths_world, lengths, failures, layer_crossings)."""
+def route_auto_layers(board, test_points, max_layers=4, **kwargs):
+    """Route a multi-layer board with AUTOMATIC layer assignment. Route as many nets
+    as possible planar on layer 0, push the nets that cannot route conflict-free onto
+    the next layer, and repeat up to max_layers. Obstacles — the non-routing zone —
+    block EVERY layer. Same-layer crossings are forbidden; two nets on DIFFERENT
+    layers may cross (an inter-layer via at their endpoints). So the layer assignment
+    is found by routability (not fixed) and within each layer route_all_traces
+    searches the net order. Returns (paths_world, lengths, layer_of, failures,
+    layer_crossings): layer_of[i] is the net's layer (-1 if it never routed), and the
+    number of vias is the count of nets on layers >= 1."""
     import copy
     n = min(len(board.traces), len(test_points))
     paths = [None] * n
     lengths = [float('inf')] * n
-    failures = 0
+    layer_of = [-1] * n
+    remaining = list(range(n))
     layer_crossings = {}
-    for layer in sorted(set(layer_of[:n])):
-        idxs = [i for i in range(n) if layer_of[i] == layer]
+    for layer in range(max_layers):
+        if not remaining:
+            break
         sub = copy.copy(board)
-        sub.traces = [board.traces[i] for i in idxs]
-        if layer != 0:
-            sub.rect_obstacles = []        # components/keep-outs are top-layer only
-            sub.circ_obstacles = []
-        sp, sl, sf = route_all_traces(sub, [test_points[i] for i in idxs], **kwargs)
+        sub.traces = [board.traces[i] for i in remaining]   # obstacles kept on every layer
+        sp, sl, sf = route_all_traces(sub, [test_points[i] for i in remaining], **kwargs)
         layer_crossings[layer] = count_crossings(sp)
-        failures += sf
-        for k, i in enumerate(idxs):
-            paths[i] = sp[k]
-            lengths[i] = sl[k]
-    return paths, lengths, failures, layer_crossings
+        still = []
+        for k, i in enumerate(remaining):
+            if sp[k] is None:
+                still.append(i)
+            else:
+                paths[i] = sp[k]
+                lengths[i] = sl[k]
+                layer_of[i] = layer
+        remaining = still
+    return paths, lengths, layer_of, len(remaining), layer_crossings
 
 
 def equalize_lengths(board, paths_world, passes=24, tol=1.0, target_mm=None):

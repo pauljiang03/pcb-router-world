@@ -329,29 +329,32 @@ def wrap_to_top_placement(board: BoardSpec, num_traces: int) -> List[Tuple[float
     return placed
 
 
-def two_layer_placement(board: BoardSpec, num_traces: int):
-    """For a 2-row edge board routed on TWO layers: place test points in two upper
-    rows and assign the UPPER connector row to layer 0 (the high TP row) and the
-    LOWER row to layer 1 (the lower TP row, reached by routing straight up on a
-    second layer under the connector). Each layer is a planar up-fan matched by x.
-    Returns (placed, layer_of) where layer_of[i] is the copper layer of net i."""
-    per = num_traces // 2
+def spread_placement(board: BoardSpec, num_traces: int):
+    """Endpoints spread AROUND the connector as a non-crossing radial fan: pick
+    well-separated candidate positions and match pins<->TPs by angle. Spread by
+    angle (not by maximizing distance), so the test points are distributed but stay
+    at similar radius — keeping trace lengths close enough that post-hoc
+    equalization works. Endpoints are NOT bucketed into per-layer rows; the router
+    (route_auto_layers) assigns layers itself."""
+    cand, real = generate_candidate_grid(board, 6.5)
+    cand = cand[:real]
+    ccx = board.connector_x + board.connector_w / 2
     ccy = board.connector_y + board.connector_h / 2
-    xlo = board.x_min + TP_TO_EDGE_MIN + 5.0
-    xhi = board.x_max - TP_TO_EDGE_MIN - 5.0
-    top = board.y_max - TP_TO_EDGE_MIN
-    xs = np.linspace(xlo, xhi, per)
-    row_hi = ccy + 0.85 * (top - ccy)        # layer 0 (upper connector row)
-    row_lo = ccy + 0.45 * (top - ccy)        # layer 1 (lower connector row)
-    upper = sorted(range(per, num_traces), key=lambda i: board.traces[i].start_x)
-    lower = sorted(range(per), key=lambda i: board.traces[i].start_x)
+    chosen = []
+    # farthest-from-connector first only to seed a spread set; >=13mm apart.
+    for idx in np.argsort(-np.hypot(cand[:, 0] - ccx, cand[:, 1] - ccy)):
+        if len(chosen) >= num_traces:
+            break
+        if check_tp_spacing(chosen, *cand[idx]):
+            chosen.append(tuple(cand[idx]))
+    tps = sorted(chosen[:num_traces], key=lambda p: np.arctan2(p[1] - ccy, p[0] - ccx))
+    pins = sorted(range(num_traces),
+                  key=lambda i: np.arctan2(board.traces[i].start_y - ccy,
+                                           board.traces[i].start_x - ccx))
     placed = [None] * num_traces
-    layer_of = [0] * num_traces
-    for k in range(per):
-        placed[upper[k]] = (float(xs[k]), float(row_hi)); layer_of[upper[k]] = 0
-    for k in range(per):
-        placed[lower[k]] = (float(xs[k]), float(row_lo)); layer_of[lower[k]] = 1
-    return placed, layer_of
+    for k, i in enumerate(pins):
+        placed[i] = tps[k] if k < len(tps) else tps[-1]
+    return placed
 
 
 def generate_candidate_grid(board: BoardSpec, resolution: float = 6.5,

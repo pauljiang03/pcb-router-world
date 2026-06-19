@@ -387,11 +387,16 @@ def equal_length_placement(board: BoardSpec, num_traces: int):
 
 
 def challenge_board(board_size: float = 120.0, num_traces: int = 20,
-                    n_gaps: int = 3, seed: int = 6):
+                    n_gaps: int = 3, seed: int = 6, assignment: str = "angle"):
     """A deliberately hard board: a 'moat' of obstacles rings the connector, leaving
     only n_gaps gaps, so traces CANNOT fan straight out — they must funnel through the
     gaps (forcing detours, congestion, and usually a second layer). Test points sit
-    OUTSIDE the moat, matched pin<->TP by angle. Returns (board, placed)."""
+    OUTSIDE the moat. Returns (board, placed).
+
+    assignment="angle": match pin<->pad purely by angle (default).
+    assignment="gap_aware": group BOTH pins and pads by the gap they funnel through,
+    then order within each gap — so traces sharing a gap stay ordered and traces bound
+    for different gaps don't cross at a choke point (fewer forced crossings)."""
     board = load_te_example(num_traces=num_traces, seed=seed, board_size=board_size)
     cx = board.connector_x + board.connector_w / 2
     cy = board.connector_y + board.connector_h / 2
@@ -414,10 +419,19 @@ def challenge_board(board_size: float = 120.0, num_traces: int = 20,
             break
         if check_tp_spacing(chosen, *far[i]):
             chosen.append(tuple(far[i]))
-    tps = sorted(chosen, key=lambda p: np.arctan2(p[1] - cy, p[0] - cx))
-    pins = sorted(range(num_traces),
-                  key=lambda i: np.arctan2(board.traces[i].start_y - cy,
-                                           board.traces[i].start_x - cx))
+    ang = lambda x, y: np.arctan2(y - cy, x - cx)
+    if assignment == "gap_aware":
+        def near_gap(x, y):
+            a = ang(x, y)
+            return min(range(n_gaps), key=lambda g: abs(((a - gaps[g] + np.pi) % (2 * np.pi)) - np.pi))
+        tps = sorted(chosen, key=lambda p: (near_gap(*p), ang(*p)))
+        pins = sorted(range(num_traces),
+                      key=lambda i: (near_gap(board.traces[i].start_x, board.traces[i].start_y),
+                                     ang(board.traces[i].start_x, board.traces[i].start_y)))
+    else:
+        tps = sorted(chosen, key=lambda p: ang(*p))
+        pins = sorted(range(num_traces),
+                      key=lambda i: ang(board.traces[i].start_x, board.traces[i].start_y))
     placed = [None] * num_traces
     for k, i in enumerate(pins):
         placed[i] = tps[k] if k < len(tps) else tps[-1]

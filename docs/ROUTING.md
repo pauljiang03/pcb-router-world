@@ -188,7 +188,25 @@ goes **0.94 mm (45°, `router_challenge_45deg.png`) → 1.33 mm = pitch (rectili
 crossings**, rectilinear ~5–15% longer. So clearance is *guaranteed* (≥ pitch) on boards
 where traces can't fan straight out, while staying ≤ 45°.
 
+**Challenge-board scaling (single-layer routed; all eventually route on 2–4 layers).**
+The bottleneck is **single-layer planarity at the gaps** and it scales with **trace
+count and gap count**, not assignment:
+
+| board | n=16 | n=18 | n=20 |
+|---|---|---|---|
+| 120 mm, 3 gaps | 15/16 (2L/1v) | 17/18 (2L/1v) | 16–17/20 (2L/3–4v) |
+| 100 mm, 3 gaps | 13/16 (2L/3v) | 11/18 (2L/7v) | 11/20 (3L/9v) |
+| 120 mm, 2 gaps | 14/16 (2L/2v) | 16/18 (2L/2v) | 17/20 (2L/3v) |
+
+Fewer traces and more gaps/board area → far better single-layer routability and fewer
+vias. The real levers are **wider funnels (more gaps / area) and fewer traces per gap**.
+
 **Tested and rejected:**
+- **Gap-aware pin↔pad assignment** (`challenge_board(assignment="gap_aware")`) — group
+  pins and pads by the gap they funnel through. *Doesn't reliably help*: ~tie at 3 gaps,
+  **worse at 2 gaps** (the central 2-row pins are bimodal up/down, so they don't map
+  cleanly onto gaps). Confirms the bottleneck is **topological** (gap capacity for a
+  non-crossing ordering), not the assignment.
 - **Min-via layer assignment by crossing-graph coloring** — *worse* than the greedy
   cascade (16 vias vs 12 on the default board); the cascade already packs layer 0
   near-maximally. Not shipped.
@@ -196,6 +214,14 @@ where traces can't fan straight out, while staying ≤ 45°.
   diagonals in a min-pitch fan are geometrically forced; nowhere to move them).
 - **Diagonal-safe (coarser) grid** — infeasible: coarsening to make diagonals safe
   makes min-pitch connector pins share grid cells.
+
+**Would training help?** The repo's RL controls **test-point placement** only (router and
+layer assignment are fixed). Since a sensible placement/assignment heuristic (gap-aware)
+*doesn't* beat the angle baseline, placement-based RL is unlikely to materially reduce the
+layer count here — the limit is topological (N traces through K gaps), not a placement
+the agent can pick. Training could trim placement at the margin, but the levers that move
+it are gaps/area/trace-count. The learning angle with real upside is a different
+formulation — a policy over **routing order + layer assignment** (§4) — and it needs GPU.
 
 **Still open (untested ideas, roughly by ROI):**
 - **Adaptive negotiation** (raise penalties on stagnation);

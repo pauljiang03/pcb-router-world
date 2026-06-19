@@ -735,6 +735,60 @@ def count_crossings(paths) -> int:
     return len(_crossing_pairs(paths))
 
 
+def _seg_seg_dist(A, B, C, D):
+    """Exact minimum distance between 2-D segments AB and CD (closest points)."""
+    A, B, C, D = (np.asarray(p, float) for p in (A, B, C, D))
+    d1, d2, r = B - A, D - C, A - C
+    a, e, f = d1 @ d1, d2 @ d2, d2 @ r
+    cl = lambda x: max(0.0, min(1.0, x))
+    if a <= 1e-12 and e <= 1e-12:
+        return float(np.hypot(*(A - C)))
+    if a <= 1e-12:
+        s, t = 0.0, cl(f / e)
+    else:
+        c = d1 @ r
+        if e <= 1e-12:
+            t, s = 0.0, cl(-c / a)
+        else:
+            b = d1 @ d2
+            den = a * e - b * b
+            s = cl((b * f - c * e) / den) if den > 1e-12 else 0.0
+            t = (b * s + f) / e
+            if t < 0:
+                t, s = 0.0, cl(-c / a)
+            elif t > 1:
+                t, s = 1.0, cl((b - c) / a)
+    return float(np.hypot(*((A + d1 * s) - (C + d2 * t))))
+
+
+def _seg_obstacle_clear(grid, A, B) -> bool:
+    """True if straight segment A->B stays out of all obstacle cells (densely
+    sampled against the inflated obstacle grid, so it keeps obstacle clearance)."""
+    n = max(2, int(np.hypot(B[0] - A[0], B[1] - A[1]) / (0.3 * grid.res)))
+    for tt in np.linspace(0.0, 1.0, n):
+        c, r = grid._world_to_grid(A[0] + (B[0] - A[0]) * tt, A[1] + (B[1] - A[1]) * tt)
+        if grid.obstacle_grid[r, c]:
+            return False
+    return True
+
+
+def min_trace_separation(paths) -> float:
+    """Exact minimum centerline distance between any two DIFFERENT nets' segments —
+    the true trace-to-trace clearance (in mm). A valid routing keeps this >= the
+    trace pitch (CELL_SIZE). Catches the sub-pitch parallel-diagonal case that a
+    resampled point check misses."""
+    segs = [(i, p[k], p[k + 1]) for i, p in enumerate(paths) if p
+            for k in range(len(p) - 1)]
+    m = float('inf')
+    for x in range(len(segs)):
+        ia, A, B = segs[x]
+        for y in range(x + 1, len(segs)):
+            ib, C, D = segs[y]
+            if ia != ib:
+                m = min(m, _seg_seg_dist(A, B, C, D))
+    return m
+
+
 def validate_routing_constraints(
     board: BoardSpec,
     paths: List[Optional[List[Tuple[float, float]]]],
@@ -809,7 +863,61 @@ def validate_routing_constraints(
             tp2trace_min = min(tp2trace_min,
                                float(np.hypot(arr[:, 0] - tp[0], arr[:, 1] - tp[1]).min()))
 
+    # Exact centerline trace-to-trace separation (segment-to-segment). The loop
+    # above (resampled points, loose threshold) can miss sub-pitch spacing such as
+    # parallel 45 deg traces one lane apart (~CELL_SIZE/sqrt(2)); this is the true min.
+    t2t_center_min = min_trace_separation(paths)
+    clearance_ok = t2t_center_min >= CELL_SIZE - 0.05   # >= trace pitch
+
     return {"violations": violations, "trace_to_trace_min": t2t_min,
+            "trace_to_trace_center_min": t2t_center_min, "clearance_ok": clearance_ok,
             "trace_to_edge_min": t2e_min, "trace_to_obstacle_min": t2o_min,
             "crossings": crossings, "tp_to_trace_min": tp2trace_min,
             "all_valid": len(violations) == 0 and crossings == 0}
+
+
+def any_angle_shortcut(paths, board, clearance: float = None):
+    """Post-process octilinear routes into ANY-ANGLE routes by string-pulling: replace
+    grid-step sub-paths with a straight segment whenever that segment (a) clears all
+    obstacles and (b) stays >= `clearance` (default the trace pitch CELL_SIZE) from
+    every OTHER net's segments, checked with exact segment-to-segment distance.
+
+    Because every accepted shortcut is verified against all other traces, any-angle
+    NEVER reduces trace-to-trace separation below the pitch — it cannot introduce a
+    spacing violation (answering "can we keep clearance at any angle?": yes, by
+    construction). It only shortens; pre-existing sub-pitch spacing in the input is
+    left untouched (use min_trace_separation to audit it). Returns new paths_world."""
+    if clearance is None:
+        clearance = CELL_SIZE
+    grid = RoutingGrid(board)
+    out = [list(p) if p else None for p in paths]
+    for i in range(len(out)):
+        p = out[i]
+        if not p or len(p) < 3:
+            continue
+        new = [p[0]]
+        k = 0
+        while k < len(p) - 1:
+            best = k + 1
+            for m in range(len(p) - 1, k + 1, -1):       # farthest reachable first
+                A, B = p[k], p[m]
+                if not _seg_obstacle_clear(grid, A, B):
+                    continue
+                ok = True
+                for j in range(len(out)):
+                    if j == i or not out[j]:
+                        continue
+                    q = out[j]
+                    for t in range(len(q) - 1):
+                        if _seg_seg_dist(A, B, q[t], q[t + 1]) < clearance - 1e-9:
+                            ok = False
+                            break
+                    if not ok:
+                        break
+                if ok:
+                    best = m
+                    break
+            new.append(p[best])
+            k = best
+        out[i] = new
+    return out

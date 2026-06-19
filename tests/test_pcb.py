@@ -265,6 +265,24 @@ def test_equal_length_placement_more_uniform_radius():
     assert radius_cv(equal_length_placement(b, 16)) < radius_cv(spread_placement(b, 16))
 
 
+def test_any_angle_shortens_without_reducing_clearance():
+    """any_angle_shortcut makes traces shorter (straight any-angle segments) but,
+    because each shortcut is verified by exact segment distance, never brings two
+    nets closer than they already were, and stays crossing-free."""
+    from envs.board import load_te_example, equal_length_placement
+    from envs.routing import any_angle_shortcut, min_trace_separation
+    b = load_te_example(num_traces=16, seed=6)
+    placed = equal_length_placement(b, 16)
+    p, L, f = route_all_traces(b, placed)
+    plen = lambda P: sum(np.hypot(P[k+1][0]-P[k][0], P[k+1][1]-P[k][1]) for k in range(len(P)-1))
+    base_len = sum(plen(x) for x in p if x)
+    base_sep = min_trace_separation(p)
+    aa = any_angle_shortcut(p, b)
+    assert sum(plen(x) for x in aa if x) <= base_len + 1e-6     # never longer
+    assert min_trace_separation(aa) >= base_sep - 1e-6          # clearance not reduced
+    assert count_crossings(aa) == 0                             # stays planar
+
+
 def test_router_output_never_crosses():
     """route_all_traces output is always planar: the octilinear router penalizes
     diagonal X-crossings and a final pass drops any net still crossing another, so

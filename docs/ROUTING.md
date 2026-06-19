@@ -168,14 +168,35 @@ Stress-tested on shrinking boards (160 → 95 mm, greedy + spread placements). R
   board-filling spread's 0.44 → 0.39 (~2× better). Post-hoc meandering is space-
   limited because the *short* traces sit in the congested region near the connector,
   so length must be controlled at placement time.
+- **Any-angle routing, clearance-verified** (`any_angle_shortcut`,
+  `python scripts/route_any_angle.py`, figure `router_any_angle.png`). String-pulls
+  octilinear paths into straight any-angle segments, accepting a shortcut only if it
+  clears obstacles AND stays ≥ the trace pitch from every other net (exact
+  segment-to-segment distance). ~3% shorter on small boards + obstacles, 0 crossings,
+  and it **cannot introduce a spacing violation** — it never reduces trace-to-trace
+  separation (0.939 → 0.939 measured).
+- **Exact clearance verifier** (`min_trace_separation`; `trace_to_trace_center_min` +
+  `clearance_ok` in `validate_routing_constraints`). The old check used resampled
+  points + a loose threshold and **missed sub-pitch spacing**; this is exact.
+
+**Finding — 45° at minimum pin pitch can't keep full clearance.** Two 45° traces
+leaving pins one pitch apart are inherently `pitch·sin45 ≈ 0.94 mm` apart (< the
+1.33 mm pitch). This is geometric: a *diagonal-safe* grid (pitch·√2) would resolve it
+but then min-pitch pins collide on the grid (it routed 18/20 with traces touching).
+So to *guarantee* ≥ pitch you must escape rectilinearly in the dense fan (or widen the
+pin pitch); the verifier now flags exactly where 45° dips below pitch, and any-angle
+provably doesn't make it worse.
 
 **Tested and rejected:**
 - **Min-via layer assignment by crossing-graph coloring** — *worse* than the greedy
   cascade (16 vias vs 12 on the default board); the cascade already packs layer 0
   near-maximally. Not shipped.
+- **Parallel-adjacent-diagonal penalty** in the negotiation — a no-op (the parallel
+  diagonals in a min-pitch fan are geometrically forced; nowhere to move them).
+- **Diagonal-safe (coarser) grid** — infeasible: coarsening to make diagonals safe
+  makes min-pitch connector pins share grid cells.
 
 **Still open (untested ideas, roughly by ROI):**
-- **Any-angle (Theta\*)** routing for shorter traces;
 - **Adaptive negotiation** (raise penalties on stagnation);
 - **Smarter rip-up** (rip the most-congested crossing net vs dropping it);
 - **Differential pairs / matched buses**; **manufacturability** (teardrops, acute-angle

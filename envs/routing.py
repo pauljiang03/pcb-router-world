@@ -524,6 +524,36 @@ def route_all_traces(
             break
 
     routes = best_routes
+
+    # Rescue pass: a net is dropped when the path it TRIED conflicted — but a different
+    # path often exists. Re-route each dropped net with every KEPT net's cells
+    # hard-blocked (so it cannot overlap them), and accept it only if it adds no
+    # crossing. Recovers "failed" nets that are actually routable on another path.
+    dropped = sorted((i for i in range(n) if routes[i] is None), key=lambda i: dist[i])
+    if dropped:
+        zero_cost = np.zeros((rows, cols))
+        resc = blocked.copy()
+        for j in range(n):
+            if routes[j]:
+                for (r, c) in routes[j]:
+                    resc[r, c] = True
+        kept_world = [[grid._grid_to_world(c, r) for (r, c) in routes[j]]
+                      for j in range(n) if routes[j]]
+        for i in dropped:
+            (sr, sc), (er, ec) = cells[i][0], cells[i][1]
+            resc[sr, sc] = False
+            resc[er, ec] = False
+            p = _astar_cost(resc, zero_cost, {}, {}, rows, cols, (sr, sc), (er, ec),
+                            present_penalty, tp_owner, i, diagonal)
+            if p is None:
+                continue
+            new_world = [grid._grid_to_world(c, r) for (r, c) in p]
+            if count_crossings(kept_world + [new_world]) == 0:   # kept set is planar
+                routes[i] = p
+                kept_world.append(new_world)
+                for (r, c) in p:
+                    resc[r, c] = True                            # block for later rescues
+
     paths: List[Optional[List[Tuple[float, float]]]] = []
     lengths: List[float] = []
     failures = 0

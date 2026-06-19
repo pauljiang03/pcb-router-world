@@ -21,9 +21,11 @@ from envs.board import (
 
 CELL_SIZE = TRACE_WIDTH + TRACE_TO_TRACE_MIN  # 1.3286 mm
 
-# How many cells around each test point are blocked for other traces.
-# 2 cells ≈ 2.66mm clearance from TP center.
-TP_CLEARANCE_CELLS = 2
+# Pad keep-out radius (in cells) that OTHER nets may not enter around each test
+# point — endpoint-to-other-trace-body clearance. 3 cells ≈ 4 mm (vs the ~1.3 mm
+# trace pitch); routes 20/20 on the planar layout. Larger = more clearance but
+# less routing room (tunable; 2–4 all route the planar board).
+TP_CLEARANCE_CELLS = 3
 
 
 class RoutingGrid:

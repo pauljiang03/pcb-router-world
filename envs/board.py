@@ -218,6 +218,55 @@ def load_te_example(num_traces: int = 20, seed: int = None,
     return board
 
 
+def load_edge_board(num_traces: int = 20, board_w: float = 180.0,
+                    board_h: float = 180.0, seed: int = None) -> BoardSpec:
+    """Edge-connector board: a single row of `num_traces` pins LOW on the board,
+    all escaping UPWARD, for routing every trace to test points in the upper region
+    (a planar fan to the top). Exploratory layout — see docs/ROUTING.md."""
+    board = BoardSpec(origin_x=0.0, origin_y=0.0, width=board_w, height=board_h)
+    cx = board_w / 2.0
+    if seed is not None:
+        cx += np.random.RandomState(seed).uniform(-board_w * 0.1, board_w * 0.1)
+    row_y = board_h * 0.12                       # low on the board
+    sp = TRACE_MIN_CENTER_TO_CENTER
+    xs = [cx + (i - (num_traces - 1) / 2) * sp for i in range(num_traces)]
+    span = (num_traces - 1) * sp
+    # Non-routing zone + UPTH below the pin row, so traces must escape upward.
+    board.rect_obstacles.append(Obstacle(
+        cx=cx, cy=row_y - 6.0, width=span + 4.0, height=7.0,
+        clearance=TRACE_TO_EDGE_MIN, name="non_routing_zone"))
+    board.circ_obstacles.append(CircularObstacle(
+        cx=cx, cy=row_y - 6.0, radius=0.95, clearance=TRACE_TO_UPTH_MIN, name="UPTH_1"))
+    board.connector_x = cx - span / 2 - 3.0
+    board.connector_y = row_y - 10.0
+    board.connector_w = span + 6.0
+    board.connector_h = 13.0
+    board.traces = [TraceSpec(start_x=x, start_y=row_y, breakout_length=0.8626, index=i)
+                    for i, x in enumerate(xs)]
+    return board
+
+
+def fan_to_top_placement(board: BoardSpec, num_traces: int,
+                         rows: int = 2) -> List[Tuple[float, float]]:
+    """Planar fan to the top: place test points in `rows` rows across the upper
+    region and match pins<->TPs by x (non-crossing). Returns one TP per trace
+    (in trace-index order). For load_edge_board."""
+    per = -(-num_traces // rows)
+    xlo = board.x_min + TP_TO_EDGE_MIN + 5.0
+    xhi = board.x_max - TP_TO_EDGE_MIN - 5.0
+    top = board.y_max - TP_TO_EDGE_MIN
+    start_top = max(t.start_y for t in board.traces)
+    rowys = np.linspace(start_top + 0.55 * (top - start_top), top, rows)
+    xs = np.linspace(xlo, xhi, per)
+    tps = sorted([(float(x), float(y)) for y in rowys for x in xs],
+                 key=lambda p: p[0])[:num_traces]
+    pins = sorted(range(num_traces), key=lambda i: board.traces[i].start_x)
+    placed = [None] * num_traces
+    for k, i in enumerate(pins):
+        placed[i] = tps[k] if k < len(tps) else tps[-1]
+    return placed
+
+
 def generate_candidate_grid(board: BoardSpec, resolution: float = 6.5,
                             max_candidates: int = MAX_CANDIDATES
                             ) -> Tuple[np.ndarray, int]:

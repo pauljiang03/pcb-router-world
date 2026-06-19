@@ -106,13 +106,24 @@ is ~25 % shorter than pure-rectilinear; the remaining length is recovered by
 placement quality, not by letting traces cross.)
 
 ### 2.6 Endpoint (pad) clearance & no self-encirclement
-Each test point is a pad, not just a trace end, so the router reserves a small
-keep-out disk (radius `TP_CLEARANCE_CELLS`) around every pad that **only that pad's
-own net may enter** — keeping every pad clear of all *other* traces' bodies and of
-other pads (measured min pad-to-other-trace ≈ **3 mm** vs the ~1.3 mm trace pitch;
-tunable). `validate_routing_constraints` reports `tp_to_trace_min`. The Stage-3
-meander also refuses to add bumps within a few cells of either endpoint, so **a
-trace never surrounds its own pad** with its own body.
+Each test point is a pad, not just a trace end, so the router reserves a keep-out
+disk (radius `TP_CLEARANCE_CELLS`, currently **3 cells ≈ 4 mm**) around every pad
+that **only that pad's own net may enter** — keeping every pad clear of all *other*
+traces' bodies and of other pads (measured min pad-to-other-trace ≈ **4.2 mm** vs
+the ~1.3 mm trace pitch; tunable — 2–4 cells all route the planar board).
+`validate_routing_constraints` reports `tp_to_trace_min`. The Stage-3 length-match
+meander (`equalize_lengths`) also refuses bumps within a few cells of either
+endpoint, so **a trace never surrounds its own pad** with its own body.
+
+### 2.7 Routing to one side (edge connector → opposite edge)
+Not a general constraint, but a useful capability: `load_edge_board` puts a single
+pin row low on the board (all pins escape **upward**) and `fan_to_top_placement`
+lays test points across the upper region matched pin↔TP by x. The planar router
+then routes **all 20 traces to the top, 0 crossings** (figure:
+`eval_results/router_top_fan.png`; reproduce: `python scripts/route_to_top.py`).
+A *central* connector cannot do this (its downward-escaping row gets stuck), which
+is why the edge layout — connector low, all traces ending above the start — is the
+right shape for a one-sided fan.
 
 *Tradeoff:* multi-start costs ~`n_starts`× A* runs. It's tunable
 (`route_all_traces(..., n_starts=)`); training can use a small value and

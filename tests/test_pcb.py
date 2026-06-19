@@ -195,10 +195,23 @@ def test_length_matching_is_crossing_safe_and_equalizes():
     assert s1 <= s0 + 0.05                        # equalizes (never worsens spread)
 
 
+def test_edge_board_routes_to_top():
+    """Connector low + all traces routed UP to test points in the upper region
+    (planar fan): every TP is above every start, nearly all route, 0 crossings."""
+    from envs.board import load_edge_board, fan_to_top_placement
+    b = load_edge_board(num_traces=20, board_w=180.0, board_h=180.0)
+    placed = fan_to_top_placement(b, 20)
+    start_top = max(t.start_y for t in b.traces)
+    assert all(p[1] > start_top for p in placed)      # all traces end above the start
+    paths, _, f = route_all_traces(b, placed)
+    assert count_crossings(paths) == 0
+    assert (20 - f) >= 18                              # nearly all (measured 20/20)
+
+
 def test_router_output_never_crosses():
-    """The rectilinear router is planar by construction: cell-disjoint axis-aligned
-    paths cannot cross, and conflicting nets are dropped — so route_all_traces
-    output has zero trace crossings regardless of the (crossing-prone) placement."""
+    """route_all_traces output is always planar: the octilinear router penalizes
+    diagonal X-crossings and a final pass drops any net still crossing another, so
+    there are zero trace crossings regardless of the (crossing-prone) placement."""
     b = load_te_example(num_traces=16, seed=2)
     c, rc = generate_candidate_grid(b, 6.5); c = c[:rc]
     placed = []                                   # greedy (crossing-prone) placement

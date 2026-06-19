@@ -27,6 +27,11 @@ CELL_SIZE = TRACE_WIDTH + TRACE_TO_TRACE_MIN  # 1.3286 mm
 # less routing room (tunable; 2–4 all route the planar board).
 TP_CLEARANCE_CELLS = 3
 
+# Max depth (cells) of a length-matching meander tooth — how far it reaches into
+# open space perpendicular to the path. Deeper teeth use 2-D free area, not just the
+# cell adjacent to the trace, so equalization works even on congested boards.
+_MAX_BUMP_DEPTH = 8
+
 
 class RoutingGrid:
 
@@ -645,18 +650,33 @@ def equalize_lengths(board, paths_world, passes=24, tol=1.0, target_mm=None):
                 if added_total < need - tol and (dr == 0) != (dc == 0) and not near_end:
                     perps = [(1, 0), (-1, 0)] if dr == 0 else [(0, 1), (0, -1)]
                     for pr, pc in perps:
-                        B = (A[0] + pr, A[1] + pc)
-                        C = (N[0] + pr, N[1] + pc)
-                        if (0 <= B[0] < rows and 0 <= B[1] < cols and
-                                0 <= C[0] < rows and 0 <= C[1] < cols and
-                                not blocked[B] and not blocked[C] and
-                                B not in occ and C not in occ and B != new[-1]):
-                            new += [B, C]
-                            occ.add(B)
-                            occ.add(C)
-                            added_total += 2.0
-                            progressed = True
-                            break
+                        # Deepest free excursion (a comb tooth out and back) — reaches
+                        # past the immediately-adjacent cell into open space, so the
+                        # meander can add length even where the path's direct neighbours
+                        # are full. Each unit of depth adds 2 cells of length.
+                        D = 0
+                        while D < _MAX_BUMP_DEPTH:
+                            t = D + 1
+                            B = (A[0] + t * pr, A[1] + t * pc)
+                            C = (N[0] + t * pr, N[1] + t * pc)
+                            if (0 <= B[0] < rows and 0 <= B[1] < cols and
+                                    0 <= C[0] < rows and 0 <= C[1] < cols and
+                                    not blocked[B] and not blocked[C] and
+                                    B not in occ and C not in occ):
+                                D = t
+                            else:
+                                break
+                        if D >= 1:
+                            d = min(D, max(1, int(np.ceil((need - added_total) / 2))))
+                            tooth = ([(A[0] + t * pr, A[1] + t * pc) for t in range(1, d + 1)] +
+                                     [(N[0] + t * pr, N[1] + t * pc) for t in range(d, 0, -1)])
+                            if tooth[0] != new[-1]:
+                                new += tooth
+                                for cc in tooth:
+                                    occ.add(cc)
+                                added_total += 2.0 * d
+                                progressed = True
+                                break
                 new.append(N)
             p = new
             if not progressed:

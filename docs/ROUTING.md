@@ -153,28 +153,36 @@ the lower row's wrap on every layer.)
 (`route_all_traces(..., n_starts=)`); training can use a small value and
 evaluation a larger one.
 
-### 2.9 Further improvements (roadmap)
-Done this pass: **auto multi-layer assignment** (§2.8) and **spread endpoints**.
-Other concrete, CPU-only improvements, roughly by ROI:
-- **Min-crossing / min-via layer assignment** — the greedy cascade minimizes
-  *layers* but not *inter-layer crossings/vias*; a circular (2-page) layout or a
-  swap-based local search would cut vias on dense boards.
-- **Length-aware routing** — fold the length target into A*'s cost so traces come
-  out near-equal during routing, instead of relying on the Stage-3 meander, which
-  is space-limited (the 0.37 → 0.29 residual in the multi-layer demo).
-- **Any-angle (Theta\*)** — route off the 8-way grid for shorter, smoother traces.
-- **Adaptive negotiation** — raise present/history penalties on stagnation rather
-  than a fixed schedule; resolves congestion in fewer iterations.
-- **Smarter rip-up** — when a net won't route, rip up the *most-congested* crossing
-  net and retry, instead of dropping it (current `_remove_crossings`).
-- **Differential pairs / matched buses** — route coupled nets together with matched
-  length and spacing.
-- **Manufacturability pass** — teardrops at pads, acute-angle removal, true
-  geometric DRC (vs the current grid-cell clearance).
-- **Net ordering** (the lever you flagged) — order changes the routed count by
-  several nets; the multi-start samples it and `scripts/gen_ordering_data.py`
-  distills a learned order (§4.1). Learned **layer assignment** is the natural
-  companion lever.
+### 2.9 Further improvements — what the harder-board tests showed
+Stress-tested on shrinking boards (160 → 95 mm, greedy + spread placements). Results:
+
+**Shipped (measured wins):**
+- **Auto multi-layer assignment** (§2.8) — routes **20/20 even at 95 mm**, degrading
+  gracefully by adding layers (4 → 5), never failing. Robust on every size tested.
+- **Deeper meander teeth** (`equalize_lengths`, `_MAX_BUMP_DEPTH`) — the old meander
+  bumped only the *adjacent* cell and plateaued (0.38 at any pass count); teeth that
+  reach into 2-D free space help on the tightest boards (95 mm: 0.72 → **0.51**), and
+  stay crossing-safe.
+- **Equal-length placement** (`equal_length_placement`) — the **real length lever**:
+  TPs on a common-radius ring → near-equal traces → spread 0.31 → **0.19**, vs the
+  board-filling spread's 0.44 → 0.39 (~2× better). Post-hoc meandering is space-
+  limited because the *short* traces sit in the congested region near the connector,
+  so length must be controlled at placement time.
+
+**Tested and rejected:**
+- **Min-via layer assignment by crossing-graph coloring** — *worse* than the greedy
+  cascade (16 vias vs 12 on the default board); the cascade already packs layer 0
+  near-maximally. Not shipped.
+
+**Still open (untested ideas, roughly by ROI):**
+- **Any-angle (Theta\*)** routing for shorter traces;
+- **Adaptive negotiation** (raise penalties on stagnation);
+- **Smarter rip-up** (rip the most-congested crossing net vs dropping it);
+- **Differential pairs / matched buses**; **manufacturability** (teardrops, acute-angle
+  removal, true geometric DRC);
+- **Net ordering** (the lever you flagged) + learned **layer assignment** — order
+  shifts the routed count by several nets; `scripts/gen_ordering_data.py` distills a
+  learned order (§4.1).
 
 ---
 

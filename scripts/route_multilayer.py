@@ -17,7 +17,7 @@ import argparse
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 import numpy as np
-from envs.board import load_te_example, spread_placement
+from envs.board import load_te_example, spread_placement, equal_length_placement
 from envs.routing import (route_auto_layers, equalize_lengths, count_crossings,
                           validate_routing_constraints, TP_CLEARANCE_CELLS, CELL_SIZE)
 
@@ -31,12 +31,16 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--num_traces", type=int, default=20)
     ap.add_argument("--seed", type=int, default=6)
+    ap.add_argument("--placement", choices=["equal_length", "spread"], default="equal_length")
     ap.add_argument("--out", type=str, default="eval_results/router_multilayer.png")
     a = ap.parse_args()
     n = a.num_traces
 
     board = load_te_example(num_traces=n, seed=a.seed)
-    placed = spread_placement(board, n)              # endpoints spread over the board
+    # equal_length: common-radius ring -> near-equal traces (best for length matching);
+    # spread: board-filling farthest-point (more area covered, worse length spread).
+    placed = (equal_length_placement(board, n) if a.placement == "equal_length"
+              else spread_placement(board, n))
     paths, L, layer_of, fails, lx = route_auto_layers(board, placed)
     used = sorted(set(l for l in layer_of if l >= 0))
     vias = sum(1 for l in layer_of if l >= 1)

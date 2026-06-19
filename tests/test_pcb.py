@@ -251,6 +251,20 @@ def test_auto_layers_planar_per_layer_and_respects_nrz():
             assert not any(deep_in_nrz(x, y) for (x, y) in p)   # never through the non-routing zone
 
 
+def test_equal_length_placement_more_uniform_radius():
+    """equal_length_placement puts TPs at a common radius, so pin->connector distances
+    are more uniform than the board-filling spread — the real lever for length matching
+    (post-hoc meandering is space-limited; measured equalized spread ~0.19 vs ~0.39)."""
+    from envs.board import load_te_example, spread_placement, equal_length_placement
+    b = load_te_example(num_traces=16, seed=6)
+    ccx = b.connector_x + b.connector_w / 2
+    ccy = b.connector_y + b.connector_h / 2
+    def radius_cv(pl):
+        r = [np.hypot(x - ccx, y - ccy) for (x, y) in pl]
+        return float(np.std(r) / np.mean(r))
+    assert radius_cv(equal_length_placement(b, 16)) < radius_cv(spread_placement(b, 16))
+
+
 def test_router_output_never_crosses():
     """route_all_traces output is always planar: the octilinear router penalizes
     diagonal X-crossings and a final pass drops any net still crossing another, so

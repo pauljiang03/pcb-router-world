@@ -314,6 +314,21 @@ def test_parametric_challenge_and_formulation_reward():
     assert isinstance(reward, float)
 
 
+def test_env_layer_aware_reward_logs_layers_and_vias():
+    """TPPlacementEnv(reward_mode='layer_aware') routes with auto layer assignment and
+    logs layer/via reward components (the elected placement reward is wired in)."""
+    from envs.pcb_env import TPPlacementEnv
+    env = TPPlacementEnv(num_traces=6, seed=0, reward_mode="layer_aware")
+    env.reset(seed=0)
+    done = False
+    info = {}
+    while not done:
+        valid = np.where(env.candidate_mask[:env._real_count])[0]
+        _, r, done, _, info = env.step(int(valid[env.current_trace % len(valid)]))
+    comp = info.get("reward_components", {})
+    assert "layers" in comp and "vias" in comp and "routing" in comp
+
+
 def test_router_output_never_crosses():
     """route_all_traces output is always planar: the octilinear router penalizes
     diagonal X-crossings and a final pass drops any net still crossing another, so

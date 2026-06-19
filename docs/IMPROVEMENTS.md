@@ -35,6 +35,21 @@ now optimizes shorter total length, equal length (spread), and compactness/
 containment; `failures` already penalize crossing-requiring placements. All
 components logged in `info["reward_components"]`.
 
+**Multi-layer, clearance & training formulations (this session — see `ROUTING.md
+§2.7–2.9`, `docs/formulations.md`):** automatic multi-layer routing
+(`route_auto_layers`, the non-routing zone blocks **every** layer); an **exact
+trace-to-trace clearance verifier** (`min_trace_separation`, `clearance_ok`); a
+**rectilinear base** (`route_all_traces(diagonal=False)`) that guarantees ≥-pitch
+spacing while staying ≤ 45°; and **parametric `ChallengeSpec`/`make_challenge`** "moat"
+boards + `scripts/layer_budget.py` (traces × gaps → layers/vias). Measured: intelligent
+**placement** (`placement="gap_aligned"`) routes 120 mm / 3-gap boards on a *single
+layer* at 16 & 18 traces — so placement-based RL is worth training. The 6 training
+**formulations** are encoded in `envs/formulations.py` (elected: **placement**, then
+**ordered-layer** for the hard residual); `TPPlacementEnv` now takes
+`reward_mode="layer_aware"` (routes `route_auto_layers`, reward = `routing_reward` =
+layers + vias + failures + length) and a `board_factory` so training can sample the
+parametric boards. Figures regenerated & labeled via `scripts/gen_figures.py`.
+
 **Deferred — need a training run to validate:** P0.3 *faithful* −∞ logit masking
 through the actor · P1.3 trained-policy eval path (needs a checkpoint) · P1.4 PPO
 baseline (needs stable-baselines3 + compute). (Reward weights are balanced and

@@ -80,4 +80,17 @@ render_board_png(bc, plc, pr, f"{OUT}/router_challenge_rectilinear.png", path_la
     title=f"Challenge 'moat', RECTILINEAR: clearance GUARANTEED, min trace sep "
           f"{per_layer(min_trace_separation, pr, lofr, ur):.2f}mm >= pitch {PITCH:.2f}, {20-fr}/20, {len(ur)} layers")
 print("6 router_challenge_rectilinear.png")
+
+# 7 & 8. Placement lever: spread "ring" vs intelligent "gap_aligned" on one moat board
+from envs.board import make_challenge, ChallengeSpec
+for tag, plc in [("ring", "ring"), ("gap_aligned", "gap_aligned")]:
+    bch, plch = make_challenge(ChallengeSpec(board_size=120.0, num_traces=20, n_gaps=3,
+                                             placement=plc))
+    pp, LL, lofp, ffp, lxp = route_auto_layers(bch, plch, max_layers=6, diagonal=True)
+    up = sorted(set(l for l in lofp if l >= 0))
+    vp = sum(1 for l in lofp if l >= 1)
+    render_board_png(bch, plch, pp, f"{OUT}/router_placement_{tag}.png", path_layers=lofp, **KW,
+        title=f"Placement = {tag} (120mm, 3 gaps, 20 traces): {20-ffp}/20 routed, "
+              f"{len(up)} layers, {vp} vias  [intelligent placement -> fewer layers/vias]")
+    print(f"{'7' if tag=='ring' else '8'} router_placement_{tag}.png")
 print("done")

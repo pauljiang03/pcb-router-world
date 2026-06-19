@@ -52,6 +52,8 @@ class TPPlacementEnv(gym.Env):
         seed: int = 0,
         route_n_starts: int = 3,
         route_max_iters: int = 25,
+        reward_mode: str = "single_layer",
+        board_factory=None,
     ):
         super().__init__()
         self.render_mode = render_mode
@@ -64,9 +66,18 @@ class TPPlacementEnv(gym.Env):
         # calls route_all_traces directly with its larger defaults for quality).
         self._route_n_starts = route_n_starts
         self._route_max_iters = route_max_iters
+        # reward_mode: "single_layer" (fast — route on one layer, penalize failures) or
+        # "layer_aware" (route_auto_layers, reward = formulations.routing_reward, so the
+        # policy is pushed toward placements that route on the FEWEST layers/vias — the
+        # elected placement formulation, see docs/formulations.md).
+        self._reward_mode = reward_mode
+        # board_factory(seed) -> BoardSpec; lets training sample parametric boards
+        # (e.g. make_challenge moats). Defaults to the central connector example.
+        self._board_factory = board_factory or (
+            lambda s: load_te_example(num_traces=self._num_traces_requested, seed=s))
 
         if board is None:
-            board = load_te_example(num_traces=num_traces, seed=seed)
+            board = self._board_factory(seed)
         self.board = board
         self.num_traces = min(num_traces, len(self.board.traces))
         self.board.traces = self.board.traces[:self.num_traces]
@@ -200,6 +211,8 @@ class TPPlacementEnv(gym.Env):
 
     def _validate(self) -> float:
         """Route all traces and compute reward."""
+        if self._reward_mode == "layer_aware":
+            return self._validate_layer_aware()
         if self.use_freerouting:
             try:
                 from envs.freerouting import route_with_freerouting
@@ -263,6 +276,37 @@ class TPPlacementEnv(gym.Env):
         self._reward_components = comp
         return reward
 
+    def _validate_layer_aware(self) -> float:
+        """Layer-aware reward (the elected placement formulation): route with automatic
+        multi-layer assignment and score with formulations.routing_reward, so the policy
+        is rewarded for placements that route on the FEWEST layers/vias (single layer
+        ideal), plus equal length (spread) and a compact footprint. See
+        docs/formulations.md."""
+        from envs.routing import route_auto_layers
+        from envs.formulations import routing_reward
+        paths, lengths, layer_of, failures, _ = route_auto_layers(
+            self.board, self.placed_tps,
+            n_starts=self._route_n_starts, max_iters=self._route_max_iters)
+        self.routed_paths = paths
+        self.routed_lengths = lengths
+        base, rc = routing_reward(self.board, paths, lengths, layer_of)
+        comp = {"routing": base, "routed": rc["routed"], "layers": rc["layers"],
+                "vias": rc["vias"], "same_layer_crossings": rc["same_layer_crossings"]}
+        reward = base
+        finite = [l for l in lengths if l < float('inf')]
+        if len(finite) > 1:                                  # (2) equal length
+            spread = (max(finite) - min(finite)) / max(np.mean(finite), 1e-6)
+            comp["spread"] = -8.0 * spread
+            reward += comp["spread"]
+        if len(self.placed_tps) > 1:                         # (3) compact footprint
+            xs = [p[0] for p in self.placed_tps]
+            ys = [p[1] for p in self.placed_tps]
+            diag = np.hypot(self.board.width, self.board.height)
+            comp["compactness"] = -5.0 * np.hypot(max(xs) - min(xs), max(ys) - min(ys)) / diag
+            reward += comp["compactness"]
+        self._reward_components = comp
+        return reward
+
     # ---- gym interface ----
 
     def reset(self, seed=None, options=None):
@@ -271,9 +315,7 @@ class TPPlacementEnv(gym.Env):
         # different layouts (board randomization). Skipped when an explicit
         # board was passed in or no seed is given.
         if seed is not None and not self._board_given:
-            self.board = load_te_example(
-                num_traces=self._num_traces_requested, seed=seed
-            )
+            self.board = self._board_factory(seed)
             self.num_traces = min(self._num_traces_requested, len(self.board.traces))
             self.board.traces = self.board.traces[:self.num_traces]
             self.candidates, self._real_count = generate_candidate_grid(

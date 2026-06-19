@@ -133,6 +133,16 @@ Reproduce: `python scripts/route_to_top.py --rows {1,2}` (figure
 `eval_results/router_top_fan.png`). A *central* connector cannot route to one side
 at all (its downward-escaping row gets stuck).
 
+**Two layers gets all 20** (`route_two_layer` + `two_layer_placement`,
+`python scripts/route_two_layer.py`, figure `router_two_layer.png`). The top row
+routes on layer 0 around the connector; the bottom row vias down and routes
+straight up **under** the connector on layer 1 (a top-layer-only obstacle), so each
+layer is a clean planar up-fan — **20/20 routed, 0 same-layer crossings**, then
+length-matched across both layers (inter-layer crossings are legal vias). Two
+choices drive the result: the **layer assignment** (which row → which layer) and
+the **routing order** within each layer (the multi-start search) — both are exactly
+the kind of guidance a learned policy could supply (§4).
+
 *Tradeoff:* multi-start costs ~`n_starts`× A* runs. It's tunable
 (`route_all_traces(..., n_starts=)`); training can use a small value and
 evaluation a larger one.

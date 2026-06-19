@@ -230,6 +230,19 @@ def test_two_row_edge_wrap_and_equalize():
     assert s1 < s0                                      # length-matching reduces spread
 
 
+def test_two_layer_routes_all_to_top():
+    """Two layers route ALL of a 2-row connector to the top: the lower row vias to
+    layer 2 and routes straight up under the connector, so every net routes and each
+    layer is planar (0 same-layer crossings)."""
+    from envs.board import load_edge_board_2row, two_layer_placement
+    from envs.routing import route_two_layer
+    b = load_edge_board_2row(num_traces=12, board_w=200.0, board_h=210.0)
+    placed, layer_of = two_layer_placement(b, 12)
+    paths, L, f, layer_x = route_two_layer(b, placed, layer_of)
+    assert f == 0                                       # all 12 route across the 2 layers
+    assert all(x == 0 for x in layer_x.values())        # each layer planar
+
+
 def test_router_output_never_crosses():
     """route_all_traces output is always planar: the octilinear router penalizes
     diagonal X-crossings and a final pass drops any net still crossing another, so

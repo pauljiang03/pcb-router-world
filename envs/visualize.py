@@ -14,7 +14,7 @@ def render_board_png(board: BoardSpec, test_points=None, paths=None,
                      filename: str = "board.png", scale: int = 6,
                      title: Optional[str] = None, labels: bool = False,
                      keepout_mm: Optional[float] = None,
-                     legend: bool = False) -> str:
+                     path_layers=None, legend: bool = False) -> str:
     """Render board, obstacles, starts, test points and routed traces to a PNG
     using PIL only (no matplotlib).
 
@@ -59,11 +59,26 @@ def render_board_png(board: BoardSpec, test_points=None, paths=None,
     n = max(len(board.traces), 1)
     colors = [tuple(int(255 * c) for c in colorsys.hsv_to_rgb(i / n, 0.85, 0.9))
               for i in range(n)]
-    # routed traces
+    # routed traces (path_layers[i] == 1 -> drawn dashed, e.g. a 2nd copper layer)
     if paths:
         for i, p in enumerate(paths):
-            if p:
-                d.line([(wx(x), wy(y)) for x, y in p], fill=colors[i % n], width=2)
+            if not p:
+                continue
+            pts = [(wx(x), wy(y)) for x, y in p]
+            col = colors[i % n]
+            if path_layers and i < len(path_layers) and path_layers[i] == 1:
+                for k in range(len(pts) - 1):
+                    (x0, y0), (x1, y1) = pts[k], pts[k + 1]
+                    seg = ((x1 - x0) ** 2 + (y1 - y0) ** 2) ** 0.5
+                    if seg < 1:
+                        continue
+                    for j in range(int(seg // 8) + 1):
+                        t0 = j * 8 / seg
+                        t1 = min((j * 8 + 5) / seg, 1.0)
+                        d.line([(x0 + (x1 - x0) * t0, y0 + (y1 - y0) * t0),
+                                (x0 + (x1 - x0) * t1, y0 + (y1 - y0) * t1)], fill=col, width=2)
+            else:
+                d.line(pts, fill=col, width=2)
     # starts (black squares)
     for t in board.traces:
         x, y = wx(t.start_x), wy(t.start_y)

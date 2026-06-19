@@ -329,6 +329,31 @@ def wrap_to_top_placement(board: BoardSpec, num_traces: int) -> List[Tuple[float
     return placed
 
 
+def two_layer_placement(board: BoardSpec, num_traces: int):
+    """For a 2-row edge board routed on TWO layers: place test points in two upper
+    rows and assign the UPPER connector row to layer 0 (the high TP row) and the
+    LOWER row to layer 1 (the lower TP row, reached by routing straight up on a
+    second layer under the connector). Each layer is a planar up-fan matched by x.
+    Returns (placed, layer_of) where layer_of[i] is the copper layer of net i."""
+    per = num_traces // 2
+    ccy = board.connector_y + board.connector_h / 2
+    xlo = board.x_min + TP_TO_EDGE_MIN + 5.0
+    xhi = board.x_max - TP_TO_EDGE_MIN - 5.0
+    top = board.y_max - TP_TO_EDGE_MIN
+    xs = np.linspace(xlo, xhi, per)
+    row_hi = ccy + 0.85 * (top - ccy)        # layer 0 (upper connector row)
+    row_lo = ccy + 0.45 * (top - ccy)        # layer 1 (lower connector row)
+    upper = sorted(range(per, num_traces), key=lambda i: board.traces[i].start_x)
+    lower = sorted(range(per), key=lambda i: board.traces[i].start_x)
+    placed = [None] * num_traces
+    layer_of = [0] * num_traces
+    for k in range(per):
+        placed[upper[k]] = (float(xs[k]), float(row_hi)); layer_of[upper[k]] = 0
+    for k in range(per):
+        placed[lower[k]] = (float(xs[k]), float(row_lo)); layer_of[lower[k]] = 1
+    return placed, layer_of
+
+
 def generate_candidate_grid(board: BoardSpec, resolution: float = 6.5,
                             max_candidates: int = MAX_CANDIDATES
                             ) -> Tuple[np.ndarray, int]:

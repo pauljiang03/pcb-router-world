@@ -536,7 +536,36 @@ def route_all_traces(
     return paths, lengths, failures
 
 
-def equalize_lengths(board, paths_world, passes=24, tol=1.0):
+def route_two_layer(board, test_points, layer_of, **kwargs):
+    """Route a multi-layer board. Nets on layer 0 route on the top copper (with all
+    obstacles); nets on any other layer route WITHOUT the rect/circ obstacles (the
+    connector body / components are top-layer-only, reached by a via to an inner
+    layer). Each layer is routed planar and independently by route_all_traces, so
+    two traces on DIFFERENT layers may cross (a via), while same-layer crossings are
+    still forbidden. Returns (paths_world, lengths, failures, layer_crossings)."""
+    import copy
+    n = min(len(board.traces), len(test_points))
+    paths = [None] * n
+    lengths = [float('inf')] * n
+    failures = 0
+    layer_crossings = {}
+    for layer in sorted(set(layer_of[:n])):
+        idxs = [i for i in range(n) if layer_of[i] == layer]
+        sub = copy.copy(board)
+        sub.traces = [board.traces[i] for i in idxs]
+        if layer != 0:
+            sub.rect_obstacles = []        # components/keep-outs are top-layer only
+            sub.circ_obstacles = []
+        sp, sl, sf = route_all_traces(sub, [test_points[i] for i in idxs], **kwargs)
+        layer_crossings[layer] = count_crossings(sp)
+        failures += sf
+        for k, i in enumerate(idxs):
+            paths[i] = sp[k]
+            lengths[i] = sl[k]
+    return paths, lengths, failures, layer_crossings
+
+
+def equalize_lengths(board, paths_world, passes=24, tol=1.0, target_mm=None):
     """Stage 3 — length matching. Meander shorter traces to the longest trace by
     inserting serpentine 'bumps' (a 1-cell perpendicular detour out and back) in
     free cells along each path. Crossing-safe by construction: bumps only ever use
@@ -576,7 +605,9 @@ def equalize_lengths(board, paths_world, passes=24, tol=1.0):
     routed = [p for p in cell_paths if p]
     if not routed:
         return paths_world, [float('inf')] * len(paths_world), 0.0, 0
-    target = max(plen(p) for p in routed)
+    # target length in cells: a caller-supplied global target (for matching across
+    # multiple layers) or the longest routed trace here.
+    target = (target_mm / res) if target_mm is not None else max(plen(p) for p in routed)
 
     for i in range(len(cell_paths)):
         p = cell_paths[i]

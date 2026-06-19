@@ -386,56 +386,99 @@ def equal_length_placement(board: BoardSpec, num_traces: int):
     return placed
 
 
-def challenge_board(board_size: float = 120.0, num_traces: int = 20,
-                    n_gaps: int = 3, seed: int = 6, assignment: str = "angle"):
-    """A deliberately hard board: a 'moat' of obstacles rings the connector, leaving
-    only n_gaps gaps, so traces CANNOT fan straight out — they must funnel through the
-    gaps (forcing detours, congestion, and usually a second layer). Test points sit
-    OUTSIDE the moat. Returns (board, placed).
+@dataclass
+class ChallengeSpec:
+    """Fully parametric 'moat' challenge board: a ring of obstacles around the connector
+    with only `n_gaps` gaps, so traces must funnel through. Every knob is exposed."""
+    board_size: float = 120.0
+    num_traces: int = 20
+    n_gaps: int = 3
+    gap_halfwidth: float = 0.45        # gap angular half-width (radians)
+    moat_radius_frac: float = 0.30     # moat ring radius / board_size
+    obstacle_frac: float = 0.055       # moat obstacle side / board_size
+    moat_segments: int = 22            # candidate obstacle slots around the ring
+    tp_radius_mult: float = 1.25       # pads placed beyond moat_radius * this
+    seed: int = 6
+    placement: str = "ring"            # pad POSITIONS: "ring" | "gap_aligned"
+    assignment: str = "angle"          # ring pin<->pad matching: "angle" | "gap_aware"
 
-    assignment="angle": match pin<->pad purely by angle (default).
-    assignment="gap_aware": group BOTH pins and pads by the gap they funnel through,
-    then order within each gap — so traces sharing a gap stay ordered and traces bound
-    for different gaps don't cross at a choke point (fewer forced crossings)."""
-    board = load_te_example(num_traces=num_traces, seed=seed, board_size=board_size)
+
+def make_challenge(spec: ChallengeSpec):
+    """Build a parametric moat board + a pad placement. Returns (board, placed).
+
+    placement="ring": pads spread on a far ring outside the moat (matched by
+      `assignment`: "angle" or gap-grouped "gap_aware").
+    placement="gap_aligned": pads CLUSTERED in radial fans at the gaps and pins
+      grouped by gap, so each trace shoots straight pin -> nearest gap -> pad with
+      minimal crossing (the 'intelligent placement' that makes routing easier)."""
+    n, ng = spec.num_traces, spec.n_gaps
+    board = load_te_example(num_traces=n, seed=spec.seed, board_size=spec.board_size)
     cx = board.connector_x + board.connector_w / 2
     cy = board.connector_y + board.connector_h / 2
-    R = board_size * 0.30
-    gaps = [2 * np.pi * g / n_gaps for g in range(n_gaps)]
-    for i in range(22):
-        ang = 2 * np.pi * i / 22
-        if any(abs(((ang - g + np.pi) % (2 * np.pi)) - np.pi) < 0.45 for g in gaps):
+    R = spec.board_size * spec.moat_radius_frac
+    gaps = [2 * np.pi * g / ng for g in range(ng)]
+    side = spec.board_size * spec.obstacle_frac
+    for i in range(spec.moat_segments):
+        a = 2 * np.pi * i / spec.moat_segments
+        if any(abs(((a - g + np.pi) % (2 * np.pi)) - np.pi) < spec.gap_halfwidth for g in gaps):
             continue                                          # leave the gaps open
         board.rect_obstacles.append(Obstacle(
-            cx=cx + R * np.cos(ang), cy=cy + R * np.sin(ang),
-            width=board_size * 0.055, height=board_size * 0.055,
-            clearance=TRACE_TO_TRACE_MIN, name="moat"))
+            cx=cx + R * np.cos(a), cy=cy + R * np.sin(a),
+            width=side, height=side, clearance=TRACE_TO_TRACE_MIN, name="moat"))
     cand, real = generate_candidate_grid(board, 6.5)
     cand = cand[:real]
-    far = cand[np.hypot(cand[:, 0] - cx, cand[:, 1] - cy) > R * 1.25]   # outside the moat
-    chosen = []
-    for i in np.argsort(-np.hypot(far[:, 0] - cx, far[:, 1] - cy)):
-        if len(chosen) >= num_traces:
-            break
-        if check_tp_spacing(chosen, *far[i]):
-            chosen.append(tuple(far[i]))
+    out = cand[np.hypot(cand[:, 0] - cx, cand[:, 1] - cy) > R * spec.tp_radius_mult]
     ang = lambda x, y: np.arctan2(y - cy, x - cx)
-    if assignment == "gap_aware":
-        def near_gap(x, y):
-            a = ang(x, y)
-            return min(range(n_gaps), key=lambda g: abs(((a - gaps[g] + np.pi) % (2 * np.pi)) - np.pi))
+    near_gap = lambda x, y: min(range(ng),
+        key=lambda g: abs(((ang(x, y) - gaps[g] + np.pi) % (2 * np.pi)) - np.pi))
+
+    if spec.placement == "gap_aligned":
+        oa = np.arctan2(out[:, 1] - cy, out[:, 0] - cx)
+        per = [n // ng + (1 if g < n % ng else 0) for g in range(ng)]   # pads per gap
+        chosen = []
+        for g in range(ng):                                   # cluster pads near each gap
+            angd = np.abs(((oa - gaps[g] + np.pi) % (2 * np.pi)) - np.pi)
+            cnt = 0
+            for idx in np.argsort(angd):
+                if cnt >= per[g]:
+                    break
+                if check_tp_spacing(chosen, *out[idx]):
+                    chosen.append(tuple(out[idx])); cnt += 1
+        for idx in np.argsort(-np.hypot(out[:, 0] - cx, out[:, 1] - cy)):  # fallback fill
+            if len(chosen) >= n:
+                break
+            if check_tp_spacing(chosen, *out[idx]):
+                chosen.append(tuple(out[idx]))
         tps = sorted(chosen, key=lambda p: (near_gap(*p), ang(*p)))
-        pins = sorted(range(num_traces),
-                      key=lambda i: (near_gap(board.traces[i].start_x, board.traces[i].start_y),
-                                     ang(board.traces[i].start_x, board.traces[i].start_y)))
-    else:
-        tps = sorted(chosen, key=lambda p: ang(*p))
-        pins = sorted(range(num_traces),
-                      key=lambda i: ang(board.traces[i].start_x, board.traces[i].start_y))
-    placed = [None] * num_traces
+        pins = sorted(range(n), key=lambda i: (near_gap(board.traces[i].start_x, board.traces[i].start_y),
+                                               ang(board.traces[i].start_x, board.traces[i].start_y)))
+    else:                                                      # "ring"
+        chosen = []
+        for idx in np.argsort(-np.hypot(out[:, 0] - cx, out[:, 1] - cy)):
+            if len(chosen) >= n:
+                break
+            if check_tp_spacing(chosen, *out[idx]):
+                chosen.append(tuple(out[idx]))
+        if spec.assignment == "gap_aware":
+            tps = sorted(chosen, key=lambda p: (near_gap(*p), ang(*p)))
+            pins = sorted(range(n), key=lambda i: (near_gap(board.traces[i].start_x, board.traces[i].start_y),
+                                                   ang(board.traces[i].start_x, board.traces[i].start_y)))
+        else:
+            tps = sorted(chosen, key=lambda p: ang(*p))
+            pins = sorted(range(n), key=lambda i: ang(board.traces[i].start_x, board.traces[i].start_y))
+
+    placed = [None] * n
     for k, i in enumerate(pins):
         placed[i] = tps[k] if k < len(tps) else tps[-1]
     return board, placed
+
+
+def challenge_board(board_size: float = 120.0, num_traces: int = 20, n_gaps: int = 3,
+                    seed: int = 6, assignment: str = "angle", placement: str = "ring"):
+    """Convenience wrapper around make_challenge/ChallengeSpec (back-compat)."""
+    return make_challenge(ChallengeSpec(
+        board_size=board_size, num_traces=num_traces, n_gaps=n_gaps, seed=seed,
+        assignment=assignment, placement=placement))
 
 
 def generate_candidate_grid(board: BoardSpec, resolution: float = 6.5,

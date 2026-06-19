@@ -299,6 +299,21 @@ def test_rectilinear_base_guarantees_pitch_clearance():
     assert count_crossings(aa) == 0
 
 
+def test_parametric_challenge_and_formulation_reward():
+    """Parametric make_challenge places all pads (both placement strategies), and the
+    shared formulation reward scores a routed layer assignment."""
+    from envs.board import make_challenge, ChallengeSpec
+    from envs.formulations import ELECTED, FORMULATIONS, evaluate_ordered_layer
+    for placement in ("ring", "gap_aligned"):
+        b, pl = make_challenge(ChallengeSpec(num_traces=12, n_gaps=3, board_size=120.0,
+                                             placement=placement))
+        assert sum(1 for p in pl if p) == 12                  # parametric board fully placed
+    assert ELECTED in FORMULATIONS                            # elected formulation is registered
+    reward, comp = evaluate_ordered_layer(b, pl, [0] * 12)    # all on one layer
+    assert comp["routed"] >= 8 and comp["same_layer_crossings"] == 0
+    assert isinstance(reward, float)
+
+
 def test_router_output_never_crosses():
     """route_all_traces output is always planar: the octilinear router penalizes
     diagonal X-crossings and a final pass drops any net still crossing another, so

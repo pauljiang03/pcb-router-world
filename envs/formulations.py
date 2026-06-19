@@ -1,0 +1,127 @@
+"""Training formulations for the PCB placement+routing problem — encoded so you can
+pick one when you train (heavy RL is GPU/later). See docs/formulations.md for the full
+write-up and the election rationale.
+
+The router itself is classical (negotiated octilinear/rectilinear A* + auto layer
+assignment). Learning can be injected at different decision points; each is an MDP in
+FORMULATIONS below. This module also provides the SHARED terminal reward and a CPU
+evaluator for the elected formulation, so a policy (or a heuristic) can be scored
+without any training loop.
+"""
+from dataclasses import dataclass
+import copy
+import numpy as np
+
+from envs.routing import route_all_traces, count_crossings, min_trace_separation, CELL_SIZE
+
+
+@dataclass
+class Formulation:
+    key: str
+    controls: str          # what the policy outputs
+    state: str
+    action: str
+    reward: str
+    targets_bottleneck: str
+    cost: str
+
+
+# The forced-crossing bottleneck (traces funnelling through a few gaps) is decided by
+# ROUTING ORDER + LAYER assignment; placement is a weaker, topology-bounded lever.
+FORMULATIONS = {
+    "placement": Formulation(
+        "placement", "where each test point goes (candidate cell)",
+        "64x64x3 board image + index of net to place", "candidate grid cell",
+        "terminal: routable + length + spread + compactness",
+        "YES on boards with room+gaps (measured: gap-aligned placement -> single-layer "
+        "at 16/18 traces, 19/20 at 20); only topology-bound on tight/few-gap boards",
+        "ALREADY BUILT (envs/pcb_env.py:TPPlacementEnv); needs GPU to train"),
+    "net_ordering": Formulation(
+        "net_ordering", "the order nets are routed",
+        "board + congestion (present/history) + routed-so-far mask", "pick next net",
+        "-failures - w*crossings - w*length (or +1 per conflict-free net)",
+        "directly (order decides which nets fit before congestion locks them out)",
+        "distillation dataset exists (scripts/gen_ordering_data.py); GPU to train"),
+    "layer_assignment": Formulation(
+        "layer_assignment", "which copper layer each net routes on",
+        "board + crossing graph", "layer per net (sequential)",
+        "-layers - vias - failures",
+        "directly (sets how many nets spill to inner layers = the via count)",
+        "moderate build; GPU to train"),
+    "ordered_layer": Formulation(
+        "ordered_layer", "jointly: the next net AND its layer",
+        "board + per-layer congestion + remaining-nets mask", "(net, layer)",
+        "-layers - vias - failures - w*length (see routing_reward)",
+        "HEAD-ON: order+layer together determine the forced crossings -> layer count",
+        "moderate build; subsumes net_ordering+layer_assignment; GPU to train"),
+    "waypoint": Formulation(
+        "waypoint", "intermediate points that steer each net's A* (your original idea)",
+        "board + current partial route", "next waypoint",
+        "routed + length",
+        "per-net (escapes A* traps); weak on the global ordering bottleneck",
+        "moderate build; GPU to train"),
+    "joint_worldmodel": Formulation(
+        "joint_worldmodel", "placement + order + layer together, in a world model",
+        "full board", "combined", "global quality (routing_reward)",
+        "everything (ultimate); ties to the DreamerV3 thesis",
+        "largest build; GPU to train"),
+}
+
+# Elected: PLACEMENT (F1) as the primary lever — it is ALREADY BUILT and intelligent
+# placement measurably reaches single-layer routing on boards with room + gaps
+# (gap-aligned: 16/16, 18/18, 19/20 on 120mm/3-gap vs ring's 15-17, 0-1 vias). Train it
+# first. For the hard residual — tight or few-gap boards, where no placement beats the
+# topology — the deeper lever is ordered_layer (F4): control routing order + layer
+# directly to minimize the layer/via count.
+ELECTED = "placement"
+DEEPER = "ordered_layer"
+
+
+def routing_reward(board, paths, lengths, layer_of, *,
+                   w_route=10.0, w_layer=3.0, w_via=0.5, w_len=2.0, w_cross=100.0):
+    """Shared terminal reward for ANY formulation (higher is better). Penalizes
+    unrouted nets, extra layers, vias, total length, and any same-layer crossing."""
+    n = len(paths)
+    routed = sum(1 for p in paths if p)
+    used = sorted(set(l for l in layer_of if l >= 0))
+    layers = len(used) if used else 1
+    vias = sum(1 for l in layer_of if l >= 1)
+    fin = [x for x in lengths if x < 1e9]
+    total_len = float(sum(fin))
+    diag = float(np.hypot(board.width, board.height))
+    same_layer_x = max((count_crossings([paths[i] for i in range(n) if layer_of[i] == L])
+                        for L in used), default=0)
+    reward = (w_route * routed / max(n, 1)
+              - w_layer * (layers - 1)
+              - w_via * vias
+              - w_len * total_len / max(n * diag, 1e-6)
+              - w_cross * same_layer_x)
+    return reward, dict(routed=routed, layers=layers, vias=vias,
+                        same_layer_crossings=same_layer_x, total_len=total_len)
+
+
+def route_fixed_layers(board, placed, layer_of, **kw):
+    """Route a board given a FIXED per-net layer assignment (a policy's output). Each
+    layer is routed planar and independently. Obstacles block every layer. Returns
+    (paths, lengths, failures)."""
+    n = min(len(board.traces), len(placed))
+    paths = [None] * n
+    lengths = [float('inf')] * n
+    failures = 0
+    for L in sorted(set(layer_of[:n])):
+        idx = [i for i in range(n) if layer_of[i] == L]
+        sub = copy.copy(board)
+        sub.traces = [board.traces[i] for i in idx]
+        sp, sl, sf = route_all_traces(sub, [placed[i] for i in idx], **kw)
+        failures += sf
+        for k, i in enumerate(idx):
+            paths[i] = sp[k]
+            lengths[i] = sl[k]
+    return paths, lengths, failures
+
+
+def evaluate_ordered_layer(board, placed, layer_of, **kw):
+    """CPU evaluator for the ELECTED formulation: score a layer assignment (the policy
+    output) by routing it and applying the shared reward. Returns (reward, components)."""
+    paths, lengths, _ = route_fixed_layers(board, placed, layer_of, **kw)
+    return routing_reward(board, paths, lengths, layer_of)

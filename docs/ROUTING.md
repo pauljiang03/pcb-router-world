@@ -203,10 +203,9 @@ vias. The real levers are **wider funnels (more gaps / area) and fewer traces pe
 
 **Tested and rejected:**
 - **Gap-aware pin↔pad assignment** (`challenge_board(assignment="gap_aware")`) — group
-  pins and pads by the gap they funnel through. *Doesn't reliably help*: ~tie at 3 gaps,
-  **worse at 2 gaps** (the central 2-row pins are bimodal up/down, so they don't map
-  cleanly onto gaps). Confirms the bottleneck is **topological** (gap capacity for a
-  non-crossing ordering), not the assignment.
+  pins and pads by the gap they funnel through, **pad positions unchanged**. *Doesn't
+  reliably help*: ~tie at 3 gaps, **worse at 2 gaps**. Re-matching alone isn't the lever —
+  but MOVING the pads is (see "intelligent placement" below).
 - **Min-via layer assignment by crossing-graph coloring** — *worse* than the greedy
   cascade (16 vias vs 12 on the default board); the cascade already packs layer 0
   near-maximally. Not shipped.
@@ -215,13 +214,26 @@ vias. The real levers are **wider funnels (more gaps / area) and fewer traces pe
 - **Diagonal-safe (coarser) grid** — infeasible: coarsening to make diagonals safe
   makes min-pitch connector pins share grid cells.
 
-**Would training help?** The repo's RL controls **test-point placement** only (router and
-layer assignment are fixed). Since a sensible placement/assignment heuristic (gap-aware)
-*doesn't* beat the angle baseline, placement-based RL is unlikely to materially reduce the
-layer count here — the limit is topological (N traces through K gaps), not a placement
-the agent can pick. Training could trim placement at the margin, but the levers that move
-it are gaps/area/trace-count. The learning angle with real upside is a different
-formulation — a policy over **routing order + layer assignment** (§4) — and it needs GPU.
+**What helps — intelligent PLACEMENT** (`make_challenge(..., placement="gap_aligned")`):
+cluster pads in radial fans at the gaps and group pins by gap, so each trace shoots pin →
+nearest gap → pad with minimal crossing. Unlike the assignment-only tweak, **this is a
+real lever**: on 120 mm / 3 gaps it reaches **single layer at 16 and 18 traces (0 vias)**
+and 19/20 at 20 traces (1 via), vs 15–17 for the spread placement. It does *not* help on
+tight (100 mm) or few-gap (2-gap) boards — there the topology dominates.
+
+| placement | 120/3 n=16 | 120/3 n=18 | 120/3 n=20 | 100/3 n=20 | 120/2 n=20 |
+|---|---|---|---|---|---|
+| ring (spread) | 15/16 | 17/18 | 16/20 | 11/20 | 17/20 |
+| **gap_aligned** | **16/16** (1L) | **18/18** (1L) | **19/20** (2L/1v) | 12/20 | 11/20 |
+
+**Would training help? — yes, for placement.** The repo's RL controls **test-point
+placement**, and placement clearly has single-layer headroom on reasonable boards, so a
+learned placement policy (`TPPlacementEnv`) is worth training — it should learn
+gap-aligned-or-better placements. It can't beat the topology on the hardest boards
+(tight/few-gap); for that residual the deeper learnable lever is a **routing-order +
+layer-assignment** policy. The full menu of training formulations and the election
+(**placement first, ordered-layer for the residual**) are in `docs/formulations.md`. Both
+need GPU.
 
 **Still open (untested ideas, roughly by ROI):**
 - **Adaptive negotiation** (raise penalties on stagnation);

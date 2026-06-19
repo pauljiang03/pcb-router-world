@@ -267,6 +267,68 @@ def fan_to_top_placement(board: BoardSpec, num_traces: int,
     return placed
 
 
+def load_edge_board_2row(num_traces: int = 20, board_w: float = 240.0,
+                         board_h: float = 250.0, conn_yf: float = 0.38,
+                         seed: int = None) -> BoardSpec:
+    """Two-row edge connector low on the board: the LOWER row escapes DOWNWARD and
+    wraps up the sides, the UPPER row escapes straight up — all traces ending at
+    test points in the upper region. Exploratory: the single-layer wrap of the
+    lower row is hard, so not all 20 route (see docs/ROUTING.md)."""
+    board = BoardSpec(origin_x=0.0, origin_y=0.0, width=board_w, height=board_h)
+    cx = board_w / 2.0
+    if seed is not None:
+        cx += np.random.RandomState(seed).uniform(-board_w * 0.06, board_w * 0.06)
+    ccy = board_h * conn_yf
+    per = num_traces // 2
+    sp = TRACE_MIN_CENTER_TO_CENTER
+    xs = [cx + (i - (per - 1) / 2) * sp for i in range(per)]
+    span = (per - 1) * sp
+    nrz_h = 6.64
+    board.rect_obstacles.append(Obstacle(
+        cx=cx, cy=ccy, width=span + 4.0, height=nrz_h,
+        clearance=TRACE_TO_EDGE_MIN, name="non_routing_zone"))
+    board.circ_obstacles.append(CircularObstacle(
+        cx=cx, cy=ccy, radius=0.95, clearance=TRACE_TO_UPTH_MIN, name="UPTH_1"))
+    board.connector_x = cx - span / 2 - 3.0
+    board.connector_y = ccy - (nrz_h / 2 + 3.0)
+    board.connector_w = span + 6.0
+    board.connector_h = nrz_h + 6.0
+    lower_y = ccy - nrz_h / 2 - 0.1          # escapes downward (wraps up the sides)
+    upper_y = ccy + nrz_h / 2 + 0.1          # escapes straight up
+    traces = [TraceSpec(start_x=x, start_y=lower_y, breakout_length=0.8626, index=i)
+              for i, x in enumerate(xs)]
+    traces += [TraceSpec(start_x=x, start_y=upper_y, breakout_length=0.8626, index=per + i)
+               for i, x in enumerate(xs)]
+    board.traces = traces[:num_traces]
+    return board
+
+
+def wrap_to_top_placement(board: BoardSpec, num_traces: int) -> List[Tuple[float, float]]:
+    """Planar fan to the top for a 2-row edge board (load_edge_board_2row): the
+    lower row goes to the OUTER top test points (wrapping around the sides), the
+    upper row to the MIDDLE ones, matched by x so the routing is non-crossing."""
+    per = num_traces // 2
+    ccy = board.connector_y + board.connector_h / 2
+    xlo = board.x_min + TP_TO_EDGE_MIN + 5.0
+    xhi = board.x_max - TP_TO_EDGE_MIN - 5.0
+    top = board.y_max - TP_TO_EDGE_MIN
+    rowys = np.linspace(ccy + 0.55 * (top - ccy), top, 2)
+    xs = np.linspace(xlo, xhi, (num_traces + 1) // 2)
+    tps = sorted([(float(x), float(y)) for y in rowys for x in xs],
+                 key=lambda p: p[0])[:num_traces]
+    lower = sorted(range(per), key=lambda i: board.traces[i].start_x)
+    upper = sorted(range(per, num_traces), key=lambda i: board.traces[i].start_x)
+    h = per // 2
+    placed = [None] * num_traces
+    for k in range(h):
+        placed[lower[k]] = tps[k]                         # lower-left -> leftmost TPs
+    for k in range(per):
+        placed[upper[k]] = tps[h + k]                     # upper row -> middle TPs
+    for k in range(per - h):
+        placed[lower[h + k]] = tps[h + per + k]           # lower-right -> rightmost TPs
+    return placed
+
+
 def generate_candidate_grid(board: BoardSpec, resolution: float = 6.5,
                             max_candidates: int = MAX_CANDIDATES
                             ) -> Tuple[np.ndarray, int]:

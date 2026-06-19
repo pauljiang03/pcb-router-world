@@ -208,6 +208,28 @@ def test_edge_board_routes_to_top():
     assert (20 - f) >= 18                              # nearly all (measured 20/20)
 
 
+def test_two_row_edge_wrap_and_equalize():
+    """2-row edge board: lower row escapes down and wraps up, upper row escapes up.
+    The single-layer wrap caps below all, but routed traces are crossing-free and
+    the Stage-3 meander reduces their length spread (equalization)."""
+    from envs.board import load_edge_board_2row, wrap_to_top_placement
+    from envs.routing import equalize_lengths
+    b = load_edge_board_2row(num_traces=12, board_w=220.0, board_h=230.0)
+    placed = wrap_to_top_placement(b, 12)
+    start_top = max(t.start_y for t in b.traces)
+    assert all(p[1] > start_top for p in placed)      # all TPs above the connector
+    paths, L, f = route_all_traces(b, placed)
+    assert count_crossings(paths) == 0
+    assert (12 - f) >= 7                                # most route (single-layer wrap is hard)
+    fin0 = [x for x in L if x < float('inf')]
+    s0 = (max(fin0) - min(fin0)) / np.mean(fin0)
+    eq_paths, eqL, _, _ = equalize_lengths(b, paths)
+    fin1 = [x for x in eqL if x < float('inf')]
+    s1 = (max(fin1) - min(fin1)) / np.mean(fin1)
+    assert count_crossings(eq_paths) == 0              # equalization stays planar
+    assert s1 < s0                                      # length-matching reduces spread
+
+
 def test_router_output_never_crosses():
     """route_all_traces output is always planar: the octilinear router penalizes
     diagonal X-crossings and a final pass drops any net still crossing another, so

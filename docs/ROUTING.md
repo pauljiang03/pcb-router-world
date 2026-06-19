@@ -116,14 +116,22 @@ meander (`equalize_lengths`) also refuses bumps within a few cells of either
 endpoint, so **a trace never surrounds its own pad** with its own body.
 
 ### 2.7 Routing to one side (edge connector → opposite edge)
-Not a general constraint, but a useful capability: `load_edge_board` puts a single
-pin row low on the board (all pins escape **upward**) and `fan_to_top_placement`
-lays test points across the upper region matched pin↔TP by x. The planar router
-then routes **all 20 traces to the top, 0 crossings** (figure:
-`eval_results/router_top_fan.png`; reproduce: `python scripts/route_to_top.py`).
-A *central* connector cannot do this (its downward-escaping row gets stuck), which
-is why the edge layout — connector low, all traces ending above the start — is the
-right shape for a one-sided fan.
+Not a general constraint, but a useful capability. Two layouts:
+- **Single row** (`load_edge_board` + `fan_to_top_placement`): a row of pins low on
+  the board, all escaping **upward** to test points across the upper region matched
+  pin↔TP by x → the planar router routes **all 20 to the top, 0 crossings**.
+- **Two rows** (`load_edge_board_2row` + `wrap_to_top_placement`): the lower row
+  escapes **downward and wraps up the sides**, the upper row escapes straight up —
+  both ending at the top. On a single layer this wrap is hard: the upper row routes
+  10/10 but only ~4 of the lower row's 10 fit the wrap, so **~14/20 route, 0
+  crossings** (more search / more space / a narrower keep-out don't lift it — it's a
+  single-layer limit; a 2-layer board is the real fix). Every routed trace is then
+  **length-matched** (`equalize_lengths`), visible as serpentine meanders on the
+  short traces (spread **0.9 → ~0.2**, all ≈ 193 mm).
+
+Reproduce: `python scripts/route_to_top.py --rows {1,2}` (figure
+`eval_results/router_top_fan.png`). A *central* connector cannot route to one side
+at all (its downward-escaping row gets stuck).
 
 *Tradeoff:* multi-start costs ~`n_starts`× A* runs. It's tunable
 (`route_all_traces(..., n_starts=)`); training can use a small value and

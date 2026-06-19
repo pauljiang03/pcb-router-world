@@ -157,6 +157,12 @@ evaluation a larger one.
 Stress-tested on shrinking boards (160 → 95 mm, greedy + spread placements). Results:
 
 **Shipped (measured wins):**
+- **Failed-first multi-start + dropped-net rescue** (`route_all_traces`) — after the
+  restart portfolio, extra passes give the *still-dropped* nets priority (route them
+  before the board fills) and any remainder is re-routed on a free alternative path.
+  Added on top of the restarts, so never worse; recovers boxed-out nets (**moat
+  120 mm/3-gap/20: 16 → 19 single-layer, vias 4 → 1**), always planar. (A length-cleanup
+  pass was tested and *rejected* — the negotiated router is already near-shortest, 0–1.3%.)
 - **Auto multi-layer assignment** (§2.8) — routes **20/20 even at 95 mm**, degrading
   gracefully by adding layers (4 → 5), never failing. Robust on every size tested.
 - **Deeper meander teeth** (`equalize_lengths`, `_MAX_BUMP_DEPTH`) — the old meander

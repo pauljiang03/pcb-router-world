@@ -523,6 +523,23 @@ def route_all_traces(
         if fails == 0:
             break
 
+    # Extra failed-first passes: give the nets STILL dropped priority (route them before
+    # the board fills around them) — a dropped net is usually one that got boxed out by
+    # nets routed earlier. These are ADDED on top of the restarts above (best is kept),
+    # so they can only help. The failed set is re-derived as `best` improves.
+    attempt = 0
+    while best_fails and attempt < 3:
+        attempt += 1
+        failed = [i for i in range(n) if best_routes[i] is None]
+        rest = [i for i in range(n) if best_routes[i] is not None]
+        rng.shuffle(rest)
+        routes = _negotiate(blocked, rows, cols, cells, endpoints, failed + rest,
+                            max_iters, present_penalty, history_inc, tp_owner, diagonal)
+        routes = _remove_crossings(routes, cells, rows, cols, grid)
+        fails = sum(1 for rt in routes if rt is None)
+        if fails < best_fails:
+            best_fails, best_routes = fails, routes
+
     routes = best_routes
 
     # Rescue pass: a net is dropped when the path it TRIED conflicted — but a different
